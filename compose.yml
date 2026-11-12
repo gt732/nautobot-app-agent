@@ -1,0 +1,110 @@
+name: nautobot-agent
+
+x-app: &app
+  image: nautobot-agent-dev:3.2.6-py3.12
+  build:
+    context: .
+    dockerfile: development/Dockerfile
+  env_file:
+    - development/development.env
+  # Compose reads the root .env before creating containers. Forward only these
+  # development and provider variables; never mount the private file or use keys as build args.
+  environment:
+    NAUTOBOT_LOG_LEVEL: "${NAUTOBOT_LOG_LEVEL:-DEBUG}"
+    NAUTOBOT_BEAT_LOG_LEVEL: "${NAUTOBOT_BEAT_LOG_LEVEL:-INFO}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+    OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+    OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-}"
+  volumes:
+    - ./nautobot_agent:/source/nautobot_agent
+    - ./tests:/source/tests
+    - ./docs:/source/docs
+    - ./tasks.py:/source/tasks.py:ro
+    - ./pyproject.toml:/source/pyproject.toml:ro
+    - ./poetry.lock:/source/poetry.lock:ro
+    - ./mkdocs.yml:/source/mkdocs.yml:ro
+    - type: bind
+      source: ./development/nautobot_config.py
+      target: /opt/nautobot/nautobot_config.py
+      read_only: true
+      bind:
+        create_host_path: false
+    - media:/opt/nautobot/media
+
+services:
+  nautobot:
+    <<: *app
+    command: ["nautobot-server", "runserver", "0.0.0.0:8080", "--insecure"]
+    ports:
+      - "127.0.0.1:${NAUTOBOT_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nautobot-server", "health_check"]
+      start_period: 5m
+      interval: 15s
+      timeout: 15s
+      retries: 5
+
+  worker:
+    <<: *app
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        exec watchmedo auto-restart
+        --directory /source/nautobot_agent --directory /opt/nautobot
+        --pattern '*.py' --recursive --debug-force-polling --signal SIGTERM
+        -- nautobot-server celery worker --loglevel "$$NAUTOBOT_LOG_LEVEL" --events
+    depends_on:
+      nautobot:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  beat:
+    <<: *app
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        exec watchmedo auto-restart
+        --directory /source/nautobot_agent --directory /opt/nautobot
+        --pattern '*.py' --recursive --debug-force-polling --signal SIGTERM
+        -- nautobot-server celery beat --loglevel "$$NAUTOBOT_BEAT_LOG_LEVEL"
+        --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      nautobot:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: nautobot
+      POSTGRES_USER: nautobot
+      POSTGRES_PASSWORD: nautobot-dev-only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nautobot -d nautobot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:
+  media:

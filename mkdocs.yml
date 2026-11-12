@@ -1,0 +1,79 @@
+---
+dev_addr: "127.0.0.1:8001"
+site_name: "Nautobot Agent Documentation"
+site_description: "Installation, configuration, and usage of Nautobot Agent."
+site_url: "https://gt732.github.io/nautobot-app-nautobot-agent/"
+site_dir: "nautobot_agent/static/nautobot_agent/docs"
+repo_url: "https://github.com/gt732/nautobot-app-nautobot-agent"
+edit_uri: "edit/main/docs/"
+theme:
+  name: "material"
+  features:
+    - "content.action.edit"
+    - "content.code.copy"
+    - "navigation.footer"
+    - "navigation.indexes"
+    - "navigation.tabs"
+    - "search.highlight"
+    - "search.suggest"
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: "default"
+      primary: "black"
+      toggle:
+        icon: "material/weather-sunny"
+        name: "Switch to dark mode"
+    - media: "(prefers-color-scheme: dark)"
+      scheme: "slate"
+      primary: "black"
+      toggle:
+        icon: "material/weather-night"
+        name: "Switch to light mode"
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+plugins:
+  - search
+  - glightbox
+  - mkdocstrings:
+      default_handler: "python"
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            allow_inspection: false
+            show_root_heading: true
+watch:
+  - "nautobot_agent"
+validation:
+  omitted_files: "warn"
+  absolute_links: "warn"
+  unrecognized_links: "warn"
+  anchors: "warn"
+nav:
+  - Overview: "index.md"
+  - User Guide:
+      - Overview: "user/app_overview.md"
+      - Getting Started: "user/getting_started.md"
+      - Conversations: "user/conversations.md"
+      - Charts and diagrams: "user/charts_and_diagrams.md"
+      - Privacy and Data Handling: "user/privacy.md"
+      - External interactions: "user/external_interactions.md"
+      - FAQ: "user/faq.md"
+  - Administrator Guide:
+      - Installation: "admin/install.md"
+      - Configuration: "admin/configuration.md"
+      - Permissions and source access: "admin/permissions.md"
+      - Integrations: "admin/integrations.md"
+      - Operations: "admin/operations.md"
+      - Compatibility: "admin/compatibility.md"
+      - Upgrade: "admin/upgrade.md"
+      - Removal: "admin/uninstall.md"
+  - Developer Guide:
+      - Docker Development: "dev/docker.md"
+      - Documentation: "dev/documentation.md"
+      - Code Reference: "dev/code_reference.md"
+  - Nautobot Documentation: "https://docs.nautobot.com/"

@@ -1,0 +1,193 @@
+{% extends "generic/object_retrieve.html" %}
+{% load static %}
+{% load ui_framework %}
+
+{% block extra_styles %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static 'nautobot_agent/trace.css' %}">
+{% endblock %}
+{% block breadcrumbs_wrapper %}{% render_breadcrumbs %}{% endblock %}
+{% block header %}{% endblock %}
+
+{% block content %}
+    {% url "plugins:nautobot_agent:agentexecutiontrace_list" as traces_url %}
+    <main id="agent-trace" class="agent-trace" hx-history="false" aria-busy="false">
+        <header class="trace-heading">
+            <div>
+                <p class="text-body-secondary mb-1">Execution trace <code>{{ trace.pk }}</code></p>
+                <h2 class="h4 mb-1">{% if trace_conversation %}{{ trace_conversation.title|default:'Untitled conversation' }}{% else %}Conversation{% endif %}</h2>
+                <p class="text-body-secondary mb-0">Started {{ trace.started_at|date:"DATETIME_FORMAT" }} · {{ trace.conversation.user.username }}</p>
+                {% if position %}<p class="mb-0">Turn {{ position.number }} of {{ position.total }}</p>{% endif %}
+            </div>
+            <nav class="trace-actions" aria-label="Trace actions">
+                {% if position.previous %}<a class="btn btn-outline-secondary" href="{{ position.previous.get_absolute_url }}">Previous turn</a>{% endif %}
+                {% if position.next %}<a class="btn btn-outline-secondary" href="{{ position.next.get_absolute_url }}">Next turn</a>{% endif %}
+                {% if trace_conversation %}<a class="btn btn-outline-secondary" href="{{ trace_conversation.get_absolute_url }}">Back to conversation</a>{% endif %}
+                <a class="btn btn-outline-secondary" href="{{ traces_url }}">Back to Traces</a>
+                <a class="btn btn-primary" href="{{ request.get_full_path }}" data-trace-refresh>Refresh</a>
+            </nav>
+        </header>
+        {% if not full_access %}
+            <section class="alert alert-info" role="status">
+                <h2 class="h5">Trace summary</h2>
+                <p>Execution: <strong>{{ trace.execution_label }}</strong></p>
+                <p>Diagnostics: <strong>{{ trace.get_capture_state_display }}</strong></p>
+                {% if trace.capture_state == "pending" and trace.status != "running" %}<p class="trace-capture-pending">The execution has ended; saving its trace details has not been confirmed. Refresh later, or check server logs if this persists.</p>{% endif %}
+                <p>Duration: {{ trace.duration_seconds|floatformat:2|default:"Unknown" }} s.</p>
+                <p class="mb-0">Full span and payload inspection requires both trace and span view permissions.</p>
+            </section>
+        {% else %}
+            {% if trace.status == "running" %}<p class="alert alert-warning">This execution is still running. Spans are persisted when the execution finishes; refresh manually to update this view.</p>{% endif %}
+            {% if trace.capture_state == "pending" and trace.status != "running" %}<p class="alert alert-info trace-capture-pending">The execution has ended; saving its trace details has not been confirmed. Refresh later, or check server logs if this persists.</p>{% endif %}
+            {% if trace_overview.has_integrity_anomalies %}<p class="alert alert-warning">Recorded parent relationships contain integrity anomalies; all spans are shown.</p>{% endif %}
+            <p class="trace-request-state" role="status" aria-live="polite" hidden></p>
+            <div class="trace-layout">
+                {% if include_tree %}
+                <section class="card trace-tree-card" aria-labelledby="trace-tree-title">
+                    <div class="card-header d-flex justify-content-between gap-2">
+                        <h2 id="trace-tree-title" class="h5 mb-0">Execution overview</h2>
+                        <span>{{ trace_overview.span_count }} spans</span>
+                    </div>
+                    <div class="card-body trace-tree-scroll">
+                        <ul class="trace-tree list-unstyled mb-0">
+                            {% for token in trace_tree_tokens %}
+                                {% if token.action == "enter" %}
+                                    {% with row=token.row %}
+                                        <li class="trace-tree-item{% if row.selected %} is-selected{% endif %}{% if row.has_children %} has-children{% endif %}" data-run-id="{{ row.run_id|default:'' }}">
+                                            <div class="trace-node">
+                                                <a class="trace-node-link" href="{{ request.path }}{% if row.run_id %}?span={{ row.run_id }}{% endif %}" hx-get="{{ request.path }}{% if row.run_id %}?span={{ row.run_id }}{% endif %}" hx-select="#trace-detail" hx-target="#trace-detail" hx-swap="outerHTML" hx-sync="#agent-trace:replace" data-trace-selection="{{ row.run_id|default:'' }}" {% if row.selected %}aria-current="true"{% endif %}>
+                                                    <span class="trace-kind-icon" aria-hidden="true"><i class="mdi {{ row.kind_icon }}"></i></span>
+                                                    <span class="trace-node-copy"><strong>{{ row.name }}</strong><span class="trace-node-meta">{{ row.kind|title }} · {{ row.duration_seconds|floatformat:2|default:"Unknown" }} s</span>{% if row.integrity_notice %}<span class="small text-warning-emphasis">{{ row.integrity_notice }}</span>{% endif %}</span>
+                                                    {% if row.usage %}<span class="trace-node-meta">{{ row.usage.input_tokens|default_if_none:"?" }} in / {{ row.usage.output_tokens|default_if_none:"?" }} out</span>{% endif %}
+                                                    <span class="badge trace-status trace-status-{{ row.status }}">{{ row.status_label }}</span>
+                                                </a>
+                                            </div>
+                                            {% if row.has_children %}
+                                                <details class="trace-disclosure" {% if row.expanded %}open{% endif %}>
+                                                    <summary aria-label="Expand or collapse {{ row.name }}"><i class="mdi mdi-chevron-down" aria-hidden="true"></i></summary>
+                                                    <ul class="trace-tree list-unstyled">
+                                            {% endif %}
+                                    {% endwith %}
+                                {% else %}
+                                    {% if token.has_children %}</ul></details>{% endif %}</li>
+                                {% endif %}
+                            {% endfor %}
+                        </ul>
+                        {% if not trace_overview.span_count %}<p>No spans were recorded for this execution.</p>{% endif %}
+                    </div>
+                    <footer class="card-footer small text-body-secondary">{{ trace_overview.root_count }} recorded roots · {{ trace_overview.event_count }} captured callback events</footer>
+                </section>
+                {% endif %}
+                <section id="trace-detail" class="card trace-detail-card" aria-busy="false" data-selected-run="{% if selected_span %}{{ selected_span.run_id }}{% endif %}">
+                    <div class="card-header trace-detail-heading">
+                        <h2 class="h4 mb-0" tabindex="-1">{% if selected_span %}{{ selected_span.name }}{% else %}Execution overview{% endif %}</h2>
+                        <span class="badge trace-status trace-status-{% if selected_span %}{{ selected_span.status }}{% else %}{{ trace.status }}{% endif %}">{% if selected_span %}{{ selected_span.status_label }}{% else %}{{ trace.execution_label }}{% endif %}</span>
+                        <dl class="trace-summary-metrics">
+                            <div><dt>Duration</dt><dd>{% if selected_span %}{{ selected_span.duration_seconds|floatformat:2 }}{% else %}{{ trace.duration_seconds|floatformat:2|default:"Unknown" }}{% endif %} s</dd></div>
+                            {% if selected_span %}
+                                <div><dt>Tokens</dt><dd>{% if selected_span.usage %}{{ selected_span.usage.input_tokens|default_if_none:"?" }} input / {{ selected_span.usage.output_tokens|default_if_none:"?" }} output{% else %}Unknown{% endif %}</dd></div>
+                                <div><dt>Reported cost</dt><dd><pre>{{ selected_span.reported_costs_preview.preview }}</pre>{% if selected_span.reported_costs_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}</dd></div>
+                            {% endif %}
+                        </dl>
+                        {% if not selected_span %}
+                            {% if trace.capture_state == "partial" %}
+                                <p class="alert alert-warning mb-0 trace-capture-warning"><i class="mdi mdi-alert-outline" aria-hidden="true"></i> <strong>Some trace details are unavailable.</strong> Check server logs for details.</p>
+                            {% elif trace.capture_state == "failed" %}
+                                <p class="alert alert-warning mb-0 trace-capture-warning"><i class="mdi mdi-alert-outline" aria-hidden="true"></i> <strong>Trace details could not be saved.</strong> Check server logs for details.</p>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    {# Keep button tabs out of core's anchor-only .nav.nav-tabs collapse/cloning handler. #}
+                    <div class="trace-tabs nav" role="tablist" aria-label="Trace details">
+                        {% for key, label in tabs %}<button type="button" class="trace-tab nav-link{% if key == active_tab %} active{% endif %}" data-bs-toggle="tab" data-bs-target="#trace-panel-{{ key }}" role="tab" id="trace-tab-{{ key }}" aria-controls="trace-panel-{{ key }}" aria-selected="{% if key == active_tab %}true{% else %}false{% endif %}">{{ label }}</button>{% endfor %}
+                    </div>
+                    <div class="trace-panels">
+                        <section id="trace-panel-io" class="trace-panel{% if active_tab == 'io' %} active{% endif %}" role="tabpanel" aria-labelledby="trace-tab-io" tabindex="0">
+                            {% if selected_span.kind == "chain" %}<p>Chain input and output were not captured.</p>{% endif %}
+                            {% for payload in payloads %}
+                                <section id="trace-payload-{{ payload.kind }}" class="trace-payload" aria-labelledby="trace-{{ payload.kind }}-title">
+                                    <details open>
+                                        <summary id="trace-{{ payload.kind }}-title" class="h6">{{ payload.kind|title }} JSON{% if payload.incomplete %} (display preview){% endif %}</summary>
+                                        {% if payload.available %}
+                                            <div class="trace-payload-heading">
+                                                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-copy-payload>Copy preview</button>
+                                                {% if payload.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}
+                                                {% include "nautobot_agent/inc/trace_payload_links.html" with field=payload.kind %}
+                                            </div>
+                                            <span class="trace-copy-status" role="status" aria-live="polite"></span>
+                                            <pre class="trace-payload-json">{{ payload.preview }}</pre>
+                                        {% else %}<p>No {{ payload.kind }} value was recorded.</p>{% endif %}
+                                    </details>
+
+                                </section>
+                            {% endfor %}
+                        </section>
+                        <section id="trace-panel-metadata" class="trace-panel{% if active_tab == 'metadata' %} active{% endif %}" role="tabpanel" aria-labelledby="trace-tab-metadata" tabindex="0">
+                            <h3 class="h6">Metadata</h3>
+                            <dl class="trace-metadata">
+                                <dt>Status</dt><dd>{% if selected_span %}{{ selected_span.status_label }}{% else %}{{ trace.execution_label }}{% endif %}</dd>
+                                {% if selected_span %}
+                                    <dt>Run ID</dt><dd>{{ selected_span.run_id }}</dd>
+                                    <dt>Parent run</dt><dd>{{ selected_span.parent_run_id|default:'Root span' }}</dd>
+                                    <dt>Captured kind</dt><dd>{{ selected_span.kind }}</dd>
+                                    <dt>Recorded details</dt>
+                                    <dd>
+                                        <pre>{{ selected_span.metadata_preview.preview }}</pre>
+                                        {% if selected_span.metadata_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}
+                                        {% if selected_span.metadata_preview.available %}{% include "nautobot_agent/inc/trace_payload_links.html" with field="details" %}{% endif %}
+                                    </dd>
+                                {% else %}<dt>Trace ID</dt><dd>{{ trace.pk }}</dd><dt>Recorded spans</dt><dd>{{ trace_overview.span_count }}</dd>{% endif %}
+                            </dl>
+                        </section>
+                        <section id="trace-panel-timing" class="trace-panel" role="tabpanel" aria-labelledby="trace-tab-timing" tabindex="0">
+                            <h3 class="h6">Timing</h3>
+                            <dl class="trace-metadata">
+                                {% if selected_span %}
+                                    <dt>Started</dt><dd>{{ selected_span.started_at|date:"DATETIME_FORMAT" }}</dd><dt>Ended</dt><dd>{{ selected_span.ended_at|date:"DATETIME_FORMAT" }}</dd><dt>Duration</dt><dd>{{ selected_span.duration_seconds|floatformat:2 }} s</dd><dt>Offset from execution start</dt><dd>{{ selected_span.offset_seconds|floatformat:2 }} s</dd>
+                                {% else %}
+                                    <dt>Started</dt><dd>{{ trace.started_at|date:"DATETIME_FORMAT" }}</dd><dt>Ended</dt><dd>{{ trace.ended_at|date:"DATETIME_FORMAT"|default:'Not recorded' }}</dd><dt>Duration</dt><dd>{{ trace.duration_seconds|floatformat:2|default:"Unknown" }} s</dd>
+                                {% endif %}
+                            </dl>
+                            <p class="small text-body-secondary">Durations are derived from start/end timestamps, not the sum of overlapping child spans.</p>
+                        </section>
+                        <section id="trace-panel-tokens" class="trace-panel" role="tabpanel" aria-labelledby="trace-tab-tokens" tabindex="0">
+                            <h3 class="h6">Recorded token usage</h3>
+                            {% if selected_span %}
+                                {% if selected_span.usage %}<dl class="trace-metadata"><dt>Input tokens</dt><dd>{{ selected_span.usage.input_tokens|default_if_none:'Unknown' }}</dd><dt>Output tokens</dt><dd>{{ selected_span.usage.output_tokens|default_if_none:'Unknown' }}</dd><dt>Total tokens</dt><dd>{{ selected_span.usage.total_tokens|default_if_none:'Unknown' }}</dd><dt>Source</dt><dd>{{ selected_span.usage.source }}</dd></dl>{% else %}<p>No unambiguous model usage was recorded for this span.</p>{% endif %}
+                            {% else %}
+                                {% if trace_overview.model_call_count %}
+                                    <p>Known subtotal from {{ trace_overview.model_call_count }} model calls; {{ trace_overview.usage_missing_calls }} calls without unambiguous usage.</p>
+                                    <dl class="trace-metadata">{% for metric in trace_overview.usage_metrics %}<dt>{{ metric.label }}</dt><dd>{{ metric.value|default_if_none:"Unknown" }}{% if metric.missing %} ({{ metric.missing }} calls missing this counter){% endif %}</dd>{% endfor %}</dl>
+                                {% else %}<p>No recorded model usage.</p>{% endif %}
+                            {% endif %}
+                            <h3 class="h6">Reported cost (not estimated or summed)</h3>
+                            {% if selected_span %}<pre>{{ selected_span.reported_costs_preview.preview }}</pre>{% if selected_span.reported_costs_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}{% else %}<pre>{{ trace_overview.reported_costs_preview.preview }}</pre>{% if trace_overview.reported_costs_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}{% endif %}
+                        </section>
+                        <section id="trace-panel-logs" class="trace-panel" role="tabpanel" aria-labelledby="trace-tab-logs" tabindex="0">
+                            <h3 class="h6">Callback events</h3>
+                            {% if selected_span %}
+                                <pre>{{ selected_span.events_preview.preview }}</pre>
+                                {% if selected_span.events_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}
+                                <p class="small text-body-secondary">The complete details JSON includes the retained callback events.</p>
+                                {% if selected_span.metadata_preview.available %}{% include "nautobot_agent/inc/trace_payload_links.html" with field="details" %}{% endif %}
+                                <h4 class="h6">Original event counters</h4>
+                                <pre>{{ selected_span.event_counts_preview.preview }}</pre>
+                                {% if selected_span.event_counts_preview.incomplete %}<span class="small text-body-secondary">Display preview</span>{% endif %}
+                                {% if selected_span.event_counts_preview.available %}{% include "nautobot_agent/inc/trace_payload_links.html" with field="event_counts" %}{% endif %}
+                                {% else %}
+                                    <p>{{ trace_overview.event_count }} captured callback events. Select a span to inspect its history.</p>
+                                    <ul>{% for row in trace_rows %}{% if row.event_count %}<li><a href="{{ request.path }}?span={{ row.run_id }}" hx-get="{{ request.path }}?span={{ row.run_id }}" hx-select="#trace-detail" hx-target="#trace-detail" hx-swap="outerHTML" hx-sync="#agent-trace:replace" data-trace-selection="{{ row.run_id }}">{{ row.name }} ({{ row.event_count }})</a></li>{% endif %}{% endfor %}</ul>
+                                {% endif %}
+                        </section>
+                    </div>
+                    {% if selected_span.children %}<footer class="card-footer"><h3 class="h6">Direct children ({{ selected_span.children|length }})</h3><ul class="trace-child-links">{% for child in selected_span.children %}<li><a href="{{ request.path }}?span={{ child.run_id }}" hx-get="{{ request.path }}?span={{ child.run_id }}" hx-select="#trace-detail" hx-target="#trace-detail" hx-swap="outerHTML" hx-sync="#agent-trace:replace" data-trace-selection="{{ child.run_id }}">{{ child.name }}</a><span>{{ child.kind }} · {{ child.status_label }}</span></li>{% endfor %}</ul></footer>{% endif %}
+                </section>
+            </div>
+        {% endif %}
+    </main>
+{% endblock %}
+{% block javascript %}
+    {{ block.super }}
+    <script src="{% static 'nautobot_agent/clipboard.js' %}" defer></script>
+    <script src="{% static 'nautobot_agent/trace.js' %}" defer></script>
+{% endblock %}

@@ -1,0 +1,73 @@
+.agent-trace {
+    --trace-border: var(--bs-border-color, #dee2e6);
+    --trace-muted: var(--bs-secondary-color, #6c757d);
+    --trace-selected: var(--bs-primary-bg-subtle, rgba(13, 110, 253, .12));
+    --trace-surface: var(--bs-tertiary-bg, var(--bs-body-bg));
+    color: var(--bs-body-color);
+}
+
+.agent-trace *, .agent-trace *::before, .agent-trace *::after { box-sizing: border-box; }
+.agent-trace .trace-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.agent-trace .trace-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.agent-trace .trace-layout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: start; gap: 1rem; }
+.agent-trace .trace-tree-card, .agent-trace .trace-detail-card { min-width: 0; overflow: hidden; }
+.agent-trace .trace-tree-scroll { max-height: min(72vh, 850px); overflow: auto; }
+.agent-trace .trace-node { display: flex; align-items: center; gap: .35rem; min-width: 0; border-radius: .4rem; padding: .3rem; }
+.agent-trace .trace-tree-item { min-width: 0; position: relative; }
+.agent-trace .trace-tree-item .trace-tree { margin: .15rem 0 .15rem .9rem; padding-left: .8rem; border-left: 1px solid var(--trace-border); }
+.agent-trace .trace-tree-item.is-selected > .trace-node { background: var(--trace-selected); }
+.agent-trace .trace-node-link { display: flex; align-items: center; gap: .6rem; flex: 1 1 auto; min-width: 0; color: inherit; text-decoration: none; border-radius: .35rem; padding: .25rem; }
+.agent-trace .trace-node-link:hover { background: var(--trace-surface); color: var(--bs-primary); }
+.agent-trace .trace-node-link:focus-visible, .agent-trace .trace-child-links a:focus-visible, .agent-trace .trace-tab:focus-visible, .agent-trace .trace-disclosure summary:focus-visible { outline: 3px solid var(--bs-primary); outline-offset: 2px; }
+.agent-trace .trace-node-copy { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.agent-trace .trace-node-meta { color: var(--trace-muted); font-size: .8rem; }
+.agent-trace .trace-kind-icon { display: inline-grid; place-items: center; flex: 0 0 2rem; width: 2rem; height: 2rem; border-radius: .5rem; background: var(--trace-surface); color: var(--bs-primary); font-size: 1.2rem; }
+.agent-trace .trace-disclosure summary { display: grid; place-items: center; width: 1.5rem; height: 2rem; cursor: pointer; list-style: none; border-radius: .3rem; }
+.agent-trace .trace-disclosure summary::-webkit-details-marker { display: none; }
+.agent-trace .trace-disclosure:not([open]) summary i { display: inline-block; transform: rotate(-90deg); }
+.agent-trace .trace-status { white-space: nowrap; color: var(--bs-body-color); background: var(--trace-surface); border: 1px solid var(--trace-border); }
+.agent-trace .trace-status-ok { color: var(--bs-success-text-emphasis); background: var(--bs-success-bg-subtle); }
+.agent-trace details.trace-disclosure { display: block; width: auto; }
+.agent-trace details.trace-disclosure > summary { position: absolute; z-index: 1; left: .35rem; top: .45rem; }
+.agent-trace .trace-tree-item.has-children > .trace-node { margin-left: 1.45rem; }
+.agent-trace .trace-status-error, .agent-trace .trace-status-cancelled { color: var(--bs-danger-text-emphasis); background: var(--bs-danger-bg-subtle); }
+.agent-trace .trace-detail-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; }
+.agent-trace .trace-summary-metrics { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: .2rem 0 0; }
+.agent-trace .trace-capture-warning { grid-column: 1 / -1; }
+.agent-trace .trace-summary-metrics div { min-width: 7rem; }
+.agent-trace .trace-summary-metrics dt { color: var(--trace-muted); font-size: .75rem; font-weight: 500; }
+.agent-trace .trace-summary-metrics dd { margin: 0; overflow-wrap: anywhere; }
+.agent-trace .trace-tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; border-bottom: 1px solid var(--trace-border); }
+.agent-trace .trace-tab { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: .8rem .75rem; color: var(--trace-muted); }
+.agent-trace .trace-tab.active { color: var(--bs-primary); border-color: var(--bs-primary); font-weight: 600; }
+.agent-trace .trace-panel { padding: 1rem; border-bottom: 1px solid var(--trace-border); }
+.agent-trace .trace-panel:last-child { border-bottom: 0; }
+.agent-trace.js-tabs .trace-panel:not(.active) { display: none; }
+.agent-trace .trace-payload { min-width: 0; margin-bottom: 1.1rem; }
+.agent-trace .trace-payload-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .45rem; }
+.agent-trace pre, .agent-trace code { max-width: 100%; }
+.agent-trace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-trace .trace-payload-json { max-height: 32rem; overflow: auto; padding: .85rem; border: 1px solid var(--trace-border); border-radius: .4rem; background: var(--trace-surface); font-size: .84rem; }
+.agent-trace .trace-copy-status { color: var(--trace-muted); font-size: .85rem; }
+.agent-trace .trace-metadata { display: grid; grid-template-columns: minmax(8rem, .35fr) minmax(0, 1fr); gap: .6rem 1rem; }
+.agent-trace .trace-metadata dt { color: var(--trace-muted); }
+.agent-trace .trace-metadata dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.agent-trace .trace-child-links { display: grid; gap: .35rem; padding-left: 1.2rem; }
+.agent-trace .trace-child-links li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.agent-trace [aria-busy="true"] { cursor: progress; }
+
+@media (min-width: 1200px) {
+    .agent-trace .trace-detail-card { max-height: 78vh; overflow: auto; }
+}
+@media (max-width: 1199.98px) {
+    .agent-trace .trace-layout { grid-template-columns: minmax(0, 1fr); }
+    .agent-trace .trace-tree-scroll { max-height: 45vh; }
+}
+@media (max-width: 575.98px) {
+    .agent-trace .trace-heading { align-items: flex-start; flex-direction: column; }
+    .agent-trace .trace-actions { width: 100%; }
+    .agent-trace .trace-metadata { grid-template-columns: minmax(6.5rem, .4fr) minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .agent-trace *, .agent-trace *::before, .agent-trace *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

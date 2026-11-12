@@ -1,0 +1,201 @@
+{% extends "base.html" %} {% load static %} {% block title %}Agent{% endblock %}
+{% block extra_styles %}
+<link rel="stylesheet" href="{% static 'nautobot_agent/agent.css' %}" />
+{% endblock %} {% block content %}
+<div
+  id="agent-chat"
+  class="agent-chat"
+  data-llm-configured="{{ llm_configured|yesno:'true,false' }}"
+  data-default-model="{{ default_model }}"
+  data-send-url="{% url 'plugins:nautobot_agent:agent_run_submit' %}"
+  data-state-url="{% url 'plugins:nautobot_agent:agent_state' %}"
+  data-mermaid-url="{% static 'nautobot_agent/vendor/mermaid/mermaid.esm.min.mjs' %}"
+  data-departure-cookie-name="{{ departure_cookie_name }}"
+  data-departure-user-id="{{ departure_user_id }}"
+  data-departure-cookie-path="{{ departure_cookie_path }}"
+  data-server-now-ms="{{ server_now_ms|stringformat:'d' }}"
+>
+  {% csrf_token %}
+  <div class="agent-toolbar d-flex align-items-center gap-2 border-bottom">
+    <span class="agent-brand-icon" aria-hidden="true"
+      ><i class="mdi mdi-robot-happy-outline"></i
+    ></span>
+    <span
+      id="agent-model-name"
+      class="badge rounded-pill border text-body-secondary fw-normal"
+      {% if not state.model_name and not default_model %}hidden{% endif %}
+    >{{ state.model_name|default:default_model }}</span>
+    <div id="agent-context" class="agent-context" hidden>
+      <span
+        id="agent-context-display"
+        class="agent-context-display"
+        tabindex="0"
+        aria-label="Context usage"
+        aria-describedby="agent-context-details"
+      >
+        <span id="agent-context-meter" class="agent-context-meter" hidden
+          ><span id="agent-context-fill"></span
+        ></span>
+        <span id="agent-context-status" aria-live="polite"></span>
+      </span>
+      <span
+        id="agent-context-details"
+        class="agent-context-details"
+        role="tooltip"
+      ></span>
+    </div>
+    <button
+      id="agent-stop"
+      type="button"
+      class="btn btn-sm btn-outline-danger"
+      hidden
+    >
+      <i class="mdi mdi-stop" aria-hidden="true"></i
+      ><span class="ms-1">Stop</span>
+    </button>
+    <button
+      id="agent-new-chat"
+      type="button"
+      class="btn btn-sm btn-outline-secondary ms-auto"
+      title="New chat"
+    >
+      <i class="mdi mdi-square-edit-outline" aria-hidden="true"></i
+      ><span class="ms-1">New chat</span>
+    </button>
+  </div>
+  {% if notice %}
+  <div class="alert alert-warning mb-0" role="alert">{{ notice }}</div>
+  {% endif %}
+  <div
+    id="agent-run-status"
+    class="agent-run-status"
+    role="status"
+    aria-live="polite"
+    hidden
+  >
+    <span
+      id="agent-run-status-spinner"
+      class="spinner-border spinner-border-sm me-2"
+      role="presentation"
+      aria-hidden="true"
+      hidden
+    ></span>
+    <span id="agent-run-status-text"></span>
+    <details
+      id="agent-run-status-details"
+      class="agent-run-status-details"
+      hidden
+    >
+      <summary>Technical details</summary>
+      <span id="agent-run-status-error-code"></span>
+      <span id="agent-run-status-execution-error"></span>
+    </details>
+  </div>
+
+  <details
+    id="agent-todos-panel"
+    class="agent-todos"
+    aria-labelledby="agent-todos-title"
+    open
+    hidden
+  >
+    <summary id="agent-todos-title" class="agent-todos-title">
+      <i class="mdi mdi-format-list-checks" aria-hidden="true"></i
+      ><span>To-do list</span>
+      <i
+        class="mdi mdi-chevron-down agent-todos-chevron"
+        aria-hidden="true"
+      ></i>
+    </summary>
+    <ul
+      id="agent-todos-list"
+      class="agent-todos-list list-unstyled mb-0"
+      aria-live="polite"
+    ></ul>
+  </details>
+
+  <div id="agent-scroller" class="agent-scroller flex-grow-1 overflow-auto">
+    <div class="agent-column">
+      {% if not llm_configured %}
+      <section
+        id="agent-setup"
+        class="agent-empty text-center"
+        role="status"
+        aria-labelledby="agent-setup-title"
+      >
+        <div class="agent-empty-icon text-warning" aria-hidden="true">
+          <i class="mdi mdi-robot-off-outline"></i>
+        </div>
+        <h1 id="agent-setup-title" class="h3 fw-semibold mb-2">
+          No language model configured
+        </h1>
+        <p class="text-body-secondary mb-3">
+          Add or edit an LLM configuration and select it as the default Agent
+          model.
+        </p>
+        <p class="text-body-secondary mt-3 mb-0">
+          Reload this page after setup to start chatting.
+        </p>
+      </section>
+      {% endif %}
+      <section
+        id="agent-empty"
+        class="agent-empty text-center"
+        {% if not llm_configured %}hidden{% endif %}
+      >
+        <div class="agent-empty-icon" aria-hidden="true">
+          <i class="mdi mdi-robot-happy-outline"></i>
+        </div>
+        <h1 class="h3 fw-semibold mb-1">How can I help?</h1>
+        <p class="text-body-secondary mb-2">
+          Ask about Nautobot data, models, Apps, Jobs, or APIs. For example:
+        </p>
+        <ul class="list-unstyled text-body-secondary mb-0">
+          <li>Which devices do not have a primary IP address?</li>
+          <li>How does Nautobot model VLANs and VLAN groups?</li>
+          <li>How is a Nautobot interface related to its device?</li>
+          <li>Show a pie chart of devices by status.</li>
+        </ul>
+      </section>
+      <div id="agent-log" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div class="agent-composer-wrap">
+    <form id="agent-form" class="agent-column">
+      <div class="agent-composer d-flex align-items-end gap-2">
+        <textarea
+          id="agent-input"
+          rows="1"
+          maxlength="32000"
+          class="form-control"
+          placeholder="{% if llm_configured %}Ask about Nautobot…{% else %}Chat unavailable until a language model is configured{% endif %}"
+          aria-label="Ask about Nautobot"
+          {% if not llm_configured %}disabled{% endif %}
+        ></textarea>
+        <button
+          id="agent-send"
+          type="submit"
+          class="btn btn-primary agent-send-btn"
+          title="Send"
+          aria-label="Send"
+          disabled
+        >
+          <i class="mdi mdi-arrow-up" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="agent-composer-hint">
+        {% if llm_configured %}Enter to send · Shift+Enter for a new line{% else %}A default language model is required to send messages.{% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+{{ state|json_script:"agent-state" }} {% endblock %} {% block javascript %}
+<script src="{% static 'nautobot_agent/vendor/marked.min.js' %}"></script>
+<script src="{% static 'nautobot_agent/vendor/purify.min.js' %}"></script>
+<script src="{% static 'nautobot_agent/vendor/highlight.min.js' %}"></script>
+<script src="{% static 'nautobot_agent/mermaid.js' %}"></script>
+<script src="{% static 'nautobot_agent/clipboard.js' %}"></script>
+<script src="{% static 'nautobot_agent/agent-runs.js' %}"></script>
+<script src="{% static 'nautobot_agent/agent.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,221 @@
+[project]
+name = "nautobot-agent"
+version = "1.0.0"
+description = "AI agent integration for Nautobot."
+authors = [{ name = "Geury Torres", email = "geuryt@yahoo.com" }]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.15"
+keywords = ["nautobot", "nautobot-app", "nautobot-plugin"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "nautobot>=3.0.0,<4.0.0",
+    "markdown-it-py>=4.2.0,<5",
+    "langchain>=1.4.9,<2",
+    "langchain-core>=1.7.6,<2",
+    # Imported directly by nautobot_agent.mcp (Client, ClientGroup, transports, elicitation, tool types).
+    "fastmcp>=4.1,<5",
+    "mcp>=2.3,<3",
+    # Pin the qualified filesystem permissions, tool-repair, and model-refusal behavior.
+    "deepagents==0.7.34",
+    # Exact pin: the app-owned interpreter driver is qualified against pydantic-monty 1.5.0's session,
+    # snapshot, OS-policy, and resource-limit (max_feed_duration_secs/max_memory) contract.
+    "pydantic-monty==1.5.0",
+    "langchain-openai==1.7.4",
+    "langchain-anthropic==1.7.10",
+    "langchain-google-genai==4.4.3",
+    "langchain-ollama==1.1.0",
+    "langchain-openrouter==0.2.9",
+    "langchain-deepseek==1.1.1",
+    # The checkpoint saver depends on private imports and beta delta replay contracts.
+    "langgraph==1.2.12",
+    "langgraph-checkpoint==4.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/gt732/nautobot-app-nautobot-agent"
+Repository = "https://github.com/gt732/nautobot-app-nautobot-agent"
+
+[project.optional-dependencies]
+dev = [
+    "coverage",
+    # Official checkpointer conformance suite; the dev extra runs it through ordinary Django tests.
+    "langgraph-checkpoint-conformance==0.0.2",
+    "invoke",
+    "pylint",
+    "pylint-django>=2.5.4",
+    "pylint-nautobot>=0.3.1",
+    "ruff==0.17.3",
+    "ty==0.0.94",
+    # Python implementation of markdownlint
+    "pymarkdownlnt~=0.9.30",
+    "djlint>=1.36.4,<2.0.0",
+]
+
+[tool.poetry]
+packages = [
+    { include = "nautobot_agent" },
+]
+include = [
+    { path = "nautobot_agent/static/nautobot_agent/docs/**/*", format = ["sdist", "wheel"] },
+    { path = "nautobot_agent/tools/monty/LICENSE", format = ["sdist", "wheel"] },
+]
+
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "1.6.0"
+mkdocs-material = "9.5.32"
+mkdocstrings = "0.25.2"
+mkdocstrings-python = "1.10.8"
+mkdocs-autorefs = "1.2.0"
+griffe = "1.1.1"
+mkdocs-glightbox = "~0.5.2"
+
+
+[tool.pylint.main]
+# Include the pylint_django plugin to avoid spurious warnings about Django patterns
+load-plugins = "pylint_django, pylint_nautobot"
+ignore = ".venv,.dev"
+
+[tool.pylint.basic]
+# No docstrings required for private methods (Pylint default), or for test_ functions, or for inner Meta classes.
+no-docstring-rgx = "^(_|test_|Meta$)"
+
+[tool.pylint.messages_control]
+# Pylint is kept for Django/Nautobot-aware and refactoring checks only; the
+# general pyflakes/pycodestyle-class rules are already covered faster by ruff
+# (F/E/W in [tool.ruff.lint].select). Disables map ruff rule families to the
+# equivalent pylint messages:
+#   F401/F403/F405 -> unused-import, wildcard-import, unused-wildcard-import
+#   A001/A002      -> redefined-builtin
+#   F841           -> unused-variable
+#   E711/E712      -> singleton-comparison
+#   F632           -> comparison-of-constants
+#   F706/F707      -> return-outside-function, return-arg-in-generator
+#   B011/B017      -> assert-on-string-literal, assert-on-tuple
+#   W291/W292/W293/W605 and line endings -> trailing-whitespace,
+#   missing-final-newline, invalid-character-*, mixed/unexpected-line-ending
+disable = """,
+    line-too-long,
+    too-many-positional-arguments,
+    unused-import,
+    wildcard-import,
+    unused-wildcard-import,
+    redefined-builtin,
+    unused-variable,
+    singleton-comparison,
+    trailing-whitespace,
+    missing-final-newline,
+    invalid-character-backspace,
+    invalid-character-carriage-return,
+    invalid-character-esc,
+    invalid-character-nul,
+    invalid-character-sub,
+    invalid-character-zero-width-space,
+    mixed-line-endings,
+    unexpected-line-ending-format,
+    assert-on-string-literal,
+    assert-on-tuple,
+    comparison-of-constants,
+    return-outside-function,
+    return-arg-in-generator,
+"""
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".dev"]
+
+[tool.ruff.lint]
+select = [
+    "D",  # pydocstyle
+    "F", "E", "W",  # flake8
+    "S",  # bandit
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "UP",  # pyupgrade
+    "RUF",  # ruff-specific rules
+    "A",  # builtin shadowing (Pylint's redefined-builtin is disabled in favor of this)
+    "ASYNC",  # blocking calls and misuse inside async code (MCP/agent runtime)
+    "DTZ",  # naive datetimes under Django USE_TZ
+    "PGH004",  # blanket `# noqa` that hides unrelated findings
+    "PIE794",  # duplicate class field definition (silently overwrites model/schema fields)
+    "PIE796",  # duplicate enum/choices values
+    "PLW2901",  # loop variable overwritten inside the loop body
+]
+ignore = [
+    "D212", # Multi-line docstring summaries may start on the line after the opening quotes.
+    "E501", # Line too long
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"nautobot_agent/migrations/*" = [
+    "D",
+]
+"nautobot_agent/tests/*" = [
+    "D",
+    "S"
+]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["nautobot_agent"]
+exclude = ["nautobot_agent/migrations", ".dev"]
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+invalid-ignore-comment = "error"
+unused-ignore-comment = "warn"
+# Un-awaited coroutines never run; always a bug.
+unused-awaitable = "error"
+# Names bound only on some branches (e.g. inside try/if) then used unconditionally.
+possibly-unresolved-reference = "error"
+possibly-missing-attribute = "warn"
+possibly-missing-import = "warn"
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false
+
+[tool.ty.terminal]
+error-on-warning = false
+
+[tool.coverage.run]
+disable_warnings = ["already-imported"]
+relative_files = true
+omit = [
+    # Skip Tests
+    "*/tests/*",
+]
+include = [
+    "nautobot_agent/*",
+]
+
+[tool.pymarkdown]
+plugins.selectively_enable_rules = true
+plugins.blanks-around-lists.enabled = true
+plugins.list-anchored-indent.enabled = true
+extensions.front-matter.enabled = true
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.djlint]
+ignore = "H015"
+profile="django"
+extend_exclude = ".agents/,docs/,nautobot_agent/static/,.dev/"

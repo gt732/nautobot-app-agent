@@ -1,0 +1,22 @@
+# Deny by default: personal files and Git-ignored content are not build inputs.
+**
+!pyproject.toml
+!poetry.lock
+!README.md
+!LICENSE
+!tasks.py
+!mkdocs.yml
+!nautobot_agent/
+!nautobot_agent/**
+!tests/
+!tests/**
+!docs/
+!docs/**
+!development/
+!development/Dockerfile
+!development/nautobot_config.example.py
+**/__pycache__/
+**/*.py[cod]
+**/.*
+**/*.log
+nautobot_agent/static/nautobot_agent/docs/

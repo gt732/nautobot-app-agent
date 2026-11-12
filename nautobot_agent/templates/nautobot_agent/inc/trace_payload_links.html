@@ -1,0 +1,3 @@
+{% url 'plugins:nautobot_agent:agentexecutiontrace_payload' pk=trace.pk as payload_url %}
+<a class="btn btn-sm btn-outline-secondary" href="{{ payload_url }}?field={{ field }}{% if selected_span %}&amp;span={{ selected_span.run_id }}{% endif %}" target="_blank" rel="noopener">Open complete JSON</a>
+<a class="btn btn-sm btn-outline-secondary" href="{{ payload_url }}?field={{ field }}{% if selected_span %}&amp;span={{ selected_span.run_id }}{% endif %}&amp;download=1">Download complete JSON</a>

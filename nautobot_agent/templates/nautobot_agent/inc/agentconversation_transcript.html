@@ -1,0 +1,24 @@
+{% load agent_markdown %}
+
+{% if not transcript.available %}
+    <p class="text-muted">Conversation history is currently unavailable.</p>
+{% elif transcript.entries %}
+    <div class="d-flex flex-column gap-8">
+        {% for entry in transcript.entries %}
+            {% if entry.role == "user" %}
+                <div class="py-8 px-12 rounded border border-primary">
+                    <strong class="d-block mb-4">User</strong>
+                    <div class="lh-base text-break">{{ entry.content|linebreaksbr }}</div>
+                </div>
+            {% else %}
+                <div class="py-8 px-12 rounded border">
+                    <strong class="d-block mb-4">Assistant</strong>
+                    <div class="lh-base text-break">{{ entry.content|render_agent_markdown }}</div>
+                </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+{% else %}
+    <p class="text-muted">No retained messages.</p>
+{% endif %}
+<p class="text-muted mt-8 mb-0">Older messages may have been summarized and are not shown.</p>

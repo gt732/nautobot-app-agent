@@ -6,15 +6,23 @@ site_url: "https://gt732.github.io/nautobot-app-nautobot-agent/"
 site_dir: "nautobot_agent/static/nautobot_agent/docs"
 repo_url: "https://github.com/gt732/nautobot-app-nautobot-agent"
 edit_uri: "edit/main/docs/"
+copyright: "Copyright &copy; The Authors"
 theme:
   name: "material"
+  custom_dir: "docs/assets/overrides"
+  favicon: "assets/favicon.ico"
+  logo: "assets/nautobot_logo.svg"
   features:
     - "content.action.edit"
+    - "content.action.view"
     - "content.code.copy"
     - "navigation.footer"
     - "navigation.indexes"
     - "navigation.tabs"
+    - "navigation.tabs.sticky"
+    - "navigation.tracking"
     - "search.highlight"
+    - "search.share"
     - "search.suggest"
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -29,12 +37,34 @@ theme:
       toggle:
         icon: "material/weather-night"
         name: "Switch to light mode"
+extra_css:
+  - "assets/extra.css"
+extra:
+  generator: false
+  social:
+    - icon: "fontawesome/solid/rss"
+      link: "https://blog.networktocode.com/blog/tags/nautobot"
+      name: "Network to Code Blog"
+    - icon: "fontawesome/brands/youtube"
+      link: "https://www.youtube.com/playlist?list=PLjA0bhxgryJ2Ts4GJMDA-tPzVWEncv4pb"
+      name: "Nautobot Videos"
+    - icon: "fontawesome/brands/slack"
+      link: "https://www.networktocode.com/community/"
+      name: "Network to Code Community"
+    - icon: "fontawesome/brands/github"
+      link: "https://github.com/nautobot/nautobot"
+      name: "Nautobot GitHub Repository"
 markdown_extensions:
   - admonition
   - toc:
       permalink: true
+  - attr_list
+  - md_in_html
+  - pymdownx.details
   - pymdownx.highlight
+  - pymdownx.inlinehilite
   - pymdownx.superfences
+  - footnotes
 plugins:
   - search
   - glightbox
@@ -76,4 +106,4 @@ nav:
       - Docker Development: "dev/docker.md"
       - Documentation: "dev/documentation.md"
       - Code Reference: "dev/code_reference.md"
-  - Nautobot Documentation: "https://docs.nautobot.com/"
+  - Nautobot Docs Home ↗︎: "https://docs.nautobot.com/"

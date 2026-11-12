@@ -63,6 +63,14 @@ The hosted build is separate from the file-linked in-app build above.
 Both output directories are ignored by Git. Source-edit links continue to
 target `docs/` on `main`.
 
+## Nautobot branding
+
+The site uses the official Nautobot app cookiecutter's logo, favicon, stylesheet,
+and adapted footer, with this app's banner and guide content. Theme settings live
+in `mkdocs.yml`; the assets and footer override live under `docs/assets/`.
+The upstream assets retain their Apache-2.0 license in `docs/assets/LICENSE`;
+the app itself remains MIT-licensed. Community links do not imply sponsorship.
+
 ## Edit the site
 
 - Keep `README.md` concise: summarize capabilities and trust boundaries, then link to guide pages rather than reproducing detailed setup or behavior references.

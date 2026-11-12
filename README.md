@@ -17,7 +17,7 @@ Nautobot Agent is a general-purpose conversational agent integrated into Nautobo
 
 ## See it in action
 
-https://github.com/user-attachments/assets/afd90d23-c75d-4ae5-864c-6440a23b61da
+https://github.com/user-attachments/assets/22389952-30f5-4630-96a9-60aab28e4081
 
 ## How it works
 

@@ -2,6 +2,15 @@
 
 ![Nautobot Agent banner](docs/media/repo-banner.png)
 
+<p align="center">
+  <a href="https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/ci.yml"><img src="https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/docs.yml"><img src="https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/docs.yml/badge.svg?branch=main" alt="Documentation"></a>
+  <a href="https://pypi.org/project/nautobot-agent/"><img src="https://img.shields.io/pypi/v/nautobot-agent" alt="PyPI"></a>
+  <a href="https://pypi.org/project/nautobot-agent/"><img src="https://img.shields.io/pypi/pyversions/nautobot-agent" alt="Python"></a>
+  <a href="https://gt732.github.io/nautobot-app-nautobot-agent/"><img src="https://img.shields.io/badge/docs-live-brightgreen" alt="Docs"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/gt732/nautobot-app-nautobot-agent" alt="License"></a>
+</p>
+
 Nautobot Agent is a general-purpose conversational agent integrated into Nautobot. Use it to ask questions, explore ideas, and get explanations or code examples in chat; connect conversations to Nautobot inventory and installed-App knowledge through permission-aware built-in tools.
 
 **Privacy and trust:** Messages, relevant Nautobot data, and authorized source text are sent to the configured model provider. Tracing is enabled by default and may contain unredacted prompts and tool data. Built-in tools are permission-aware and read-only; optional MCP servers are a separate trust boundary and may have broader access or external effects. Review [Privacy and data handling](https://gt732.github.io/nautobot-app-nautobot-agent/user/privacy/) before use.

@@ -67,6 +67,8 @@ For how this documentation is maintained, see [Building documentation](https://g
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for our branching and pull request policy.
+
 With Docker and Docker Compose installed, copy
 `development/nautobot_config.example.py` to `development/nautobot_config.py`
 once, then run `docker compose up` from the repository root. The local

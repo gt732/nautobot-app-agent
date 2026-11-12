@@ -63,6 +63,17 @@ The hosted build is separate from the file-linked in-app build above.
 Both output directories are ignored by Git. Source-edit links continue to
 target `docs/` on `main`.
 
+The full Docker CI workflow skips pushes and pull requests that change only
+`docs/`, `README.md`, `mkdocs.yml`, `.readthedocs.yaml`, or the documentation
+deployment workflow. Mixed code/documentation changes still run full CI, as do
+changes to dependencies, CI itself, and runtime skill Markdown. Manual CI runs
+remain available through **Actions → CI → Run workflow**. Documentation
+deployment still runs on pushes to `main`.
+
+If branch protection requires the Docker CI check, GitHub path filtering can
+leave a docs-only pull request waiting for that skipped check. Account for this
+when configuring required checks.
+
 ## Nautobot branding
 
 The site uses the official Nautobot app cookiecutter's logo, favicon, stylesheet,

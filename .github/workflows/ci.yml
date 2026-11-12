@@ -3,7 +3,19 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:

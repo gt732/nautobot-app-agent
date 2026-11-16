@@ -9,11 +9,11 @@ hide:
 
 ![Nautobot Agent](media/repo-banner.png)
 
-[![CI](https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/ci.yml)
-[![Documentation](https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/gt732/nautobot-app-nautobot-agent/actions/workflows/docs.yml)
+[![CI](https://github.com/gt732/nautobot-app-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gt732/nautobot-app-agent/actions/workflows/ci.yml)
+[![Documentation](https://github.com/gt732/nautobot-app-agent/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/gt732/nautobot-app-agent/actions/workflows/docs.yml)
 [![PyPI](https://img.shields.io/pypi/v/nautobot-agent)](https://pypi.org/project/nautobot-agent/)
 [![Python](https://img.shields.io/pypi/pyversions/nautobot-agent)](admin/compatibility.md)
-[![License](https://img.shields.io/github/license/gt732/nautobot-app-nautobot-agent)](https://github.com/gt732/nautobot-app-nautobot-agent/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/gt732/nautobot-app-agent)](https://github.com/gt732/nautobot-app-agent/blob/main/LICENSE)
 
 An [App](https://networktocode.com/nautobot-apps/) for [Nautobot](https://nautobot.com/).
 

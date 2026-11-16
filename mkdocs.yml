@@ -2,9 +2,9 @@
 dev_addr: "127.0.0.1:8001"
 site_name: "Nautobot Agent Documentation"
 site_description: "Installation, configuration, and usage of Nautobot Agent."
-site_url: "https://gt732.github.io/nautobot-app-nautobot-agent/"
+site_url: "https://gt732.github.io/nautobot-app-agent/"
 site_dir: "nautobot_agent/static/nautobot_agent/docs"
-repo_url: "https://github.com/gt732/nautobot-app-nautobot-agent"
+repo_url: "https://github.com/gt732/nautobot-app-agent"
 edit_uri: "edit/main/docs/"
 copyright: "Copyright &copy; The Authors"
 theme:

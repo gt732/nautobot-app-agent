@@ -41,8 +41,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gt732/nautobot-app-nautobot-agent"
-Repository = "https://github.com/gt732/nautobot-app-nautobot-agent"
+Homepage = "https://github.com/gt732/nautobot-app-agent"
+Repository = "https://github.com/gt732/nautobot-app-agent"
 
 [project.optional-dependencies]
 dev = [

@@ -46,7 +46,7 @@ The packaging configuration includes this generated directory in wheels and sour
 
 ## GitHub Pages
 
-The public site is <https://gt732.github.io/nautobot-app-nautobot-agent/>.
+The public site is <https://gt732.github.io/nautobot-app-agent/>.
 The `Documentation` workflow in `.github/workflows/docs.yml` builds and
 deploys it on pushes to `main`, or through **Actions → Documentation → Run workflow**.
 Repository **Settings → Pages → Source** must be **GitHub Actions**.

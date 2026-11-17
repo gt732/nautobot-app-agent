@@ -41,8 +41,8 @@ def snapshot(value):
     return _snapshot(value, None)
 
 
-def _snapshot(value, active):  # pylint: disable=too-many-return-statements,too-many-branches
-    """Encode supported values without imposing storage previews."""
+def _snapshot(value, active):  # pylint: disable=too-many-return-statements
+    """Encode leaf values directly and composites under circular-reference tracking."""
     if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, str):
@@ -62,49 +62,46 @@ def _snapshot(value, active):  # pylint: disable=too-many-return-statements,too-
         return f"<circular reference: {type(value).__qualname__} id={identity}>"
     active.add(identity)
     try:
-        if isinstance(value, BaseException):
-            return {
-                "type": safe_string(f"{type(value).__module__}.{type(value).__qualname__}"),
-                "message": safe_string(str(value)),
-                "args": _snapshot(value.args, active),
-                "traceback": safe_string("".join(traceback.format_exception(value))),
-                "attributes": _snapshot(vars(value), active),
-                "cause": _snapshot(value.__cause__, active),
-                "context": _snapshot(value.__context__, active),
-            }
-        if isinstance(value, BaseModel):
-            return {
-                "type": safe_string(f"{type(value).__module__}.{type(value).__qualname__}"),
-                "fields": _snapshot(dict(value), active),
-            }
-        if isinstance(value, AgentContext):
-            return {
-                "type": safe_string(f"{type(value).__module__}.{type(value).__qualname__}"),
-                "fields": {"user_id": _snapshot(value.user_id, active)},
-            }
-        if is_dataclass(value) and not isinstance(value, type):
-            return {
-                "type": safe_string(f"{type(value).__module__}.{type(value).__qualname__}"),
-                "fields": {item.name: _snapshot(getattr(value, item.name), active) for item in fields(value)},
-            }
-        if isinstance(value, Mapping):
-            durable = list(durable_items(value))
-            if all(isinstance(key, str) and isinstance(safe_string(key), str) for key, _ in durable):
-                return {key: _snapshot(item, active) for key, item in durable}
-            return {
-                "type": safe_string(type(value).__name__),
-                "items": [[_snapshot(key, active), _snapshot(item, active)] for key, item in durable],
-            }
-        if isinstance(value, list | tuple):
-            return [_snapshot(item, active) for item in value]
-        if isinstance(value, set | frozenset):
-            return {"type": safe_string(type(value).__name__), "items": [_snapshot(item, active) for item in value]}
-        return {
-            "type": safe_string(f"{type(value).__module__}.{type(value).__qualname__}"),
-            "repr": safe_string(repr(value)),
-        }
+        return _snapshot_composite(value, active)
     finally:
         active.remove(identity)
+
+
+def _snapshot_composite(value, active):  # pylint: disable=too-many-return-statements
+    """Encode a reference-tracked value by its type, recursing through ``active``."""
+    qualified_type = safe_string(f"{type(value).__module__}.{type(value).__qualname__}")
+    if isinstance(value, BaseException):
+        return {
+            "type": qualified_type,
+            "message": safe_string(str(value)),
+            "args": _snapshot(value.args, active),
+            "traceback": safe_string("".join(traceback.format_exception(value))),
+            "attributes": _snapshot(vars(value), active),
+            "cause": _snapshot(value.__cause__, active),
+            "context": _snapshot(value.__context__, active),
+        }
+    if isinstance(value, BaseModel):
+        return {"type": qualified_type, "fields": _snapshot(dict(value), active)}
+    if isinstance(value, AgentContext):
+        return {"type": qualified_type, "fields": {"user_id": _snapshot(value.user_id, active)}}
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "type": qualified_type,
+            "fields": {item.name: _snapshot(getattr(value, item.name), active) for item in fields(value)},
+        }
+    if isinstance(value, Mapping):
+        durable = list(durable_items(value))
+        if all(isinstance(key, str) and isinstance(safe_string(key), str) for key, _ in durable):
+            return {key: _snapshot(item, active) for key, item in durable}
+        return {
+            "type": safe_string(type(value).__name__),
+            "items": [[_snapshot(key, active), _snapshot(item, active)] for key, item in durable],
+        }
+    if isinstance(value, list | tuple):
+        return [_snapshot(item, active) for item in value]
+    if isinstance(value, set | frozenset):
+        return {"type": safe_string(type(value).__name__), "items": [_snapshot(item, active) for item in value]}
+    return {"type": qualified_type, "repr": safe_string(repr(value))}
 
 
 def callback_envelope(run_id, arguments, kwargs):
@@ -258,9 +255,7 @@ def model_call_summaries(output):
 
 def summarize_spans(rows):
     """Interpret usage and event summaries once on inspector-owned row copies."""
-    model_call_count = 0
-    usage_missing_calls = 0
-    known_totals = {key: [] for key in ("input_tokens", "output_tokens", "total_tokens")}
+    usages = []
     reported_costs = []
     event_count = 0
 
@@ -271,21 +266,19 @@ def summarize_spans(rows):
         if row["kind"] != "chat_model":
             row["usage"] = None
             continue
-
-        model_call_count += 1
-        usage = row["details"].get("usage_summary")
-        row["usage"] = usage
-        if usage is None:
-            usage_missing_calls += 1
-        else:
-            for key in known_totals:
-                if usage[key] is not None:
-                    known_totals[key].append(usage[key])
+        row["usage"] = row["details"].get("usage_summary")
+        usages.append(row["usage"])
         reported_costs.extend(row["details"].get("reported_costs") or [])
 
+    model_call_count = len(usages)
+    reported_usages = [usage for usage in usages if usage is not None]
+    known_totals = {
+        key: [usage[key] for usage in reported_usages if usage[key] is not None]
+        for key in ("input_tokens", "output_tokens", "total_tokens")
+    }
     return {
         "model_call_count": model_call_count,
-        "usage_missing_calls": usage_missing_calls,
+        "usage_missing_calls": model_call_count - len(reported_usages),
         "usage_metrics": [
             {
                 "label": key.replace("_", " ").title(),

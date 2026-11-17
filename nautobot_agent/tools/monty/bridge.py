@@ -86,5 +86,5 @@ def invoke_query_tool(
         return {"return_value": _tool_value(tool.invoke(call, config=runtime.config or None))}
     except (GraphBubbleUp, SoftTimeLimitExceeded):
         raise
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # query-tool failures resume the sandbox as exceptions
         return {"exception": exc}

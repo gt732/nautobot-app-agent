@@ -181,7 +181,7 @@ def _safe_boundary(turn: MCPTurn):
         yield
     except ToolException:
         raise
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # agent sees only a static failure; internals stay in logs
         logger.error("MCP tool call failed (%s)", type(exc).__name__)
         # Cancellation and unresolved remote effects close the turn and must still stop execution.
         turn.require_open()
@@ -219,7 +219,7 @@ def _load_mcp_tools(
         identity = UnavailableMCPServer(str(server.pk), cast(str, server.name))
         try:
             launch = Launch.from_server(server)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # one misconfigured server must not hide the others
             logger.error("MCP server configuration failed (id=%s, error=%s)", server.pk, type(exc).__name__)
             unavailable.append(identity)
             continue
@@ -230,7 +230,7 @@ def _load_mcp_tools(
 
     try:
         result: MCPDiscoveryResult = turn.discover(launches) if launches else MCPDiscoveryResult((), ())
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # discovery failure maps to a static catalog error
         logger.error("MCP discovery failed (%s)", type(exc).__name__)
         raise MCPCatalogError(_DISCOVERY_FAILED) from None
     tools = _validated_tools(result.entries, launches)

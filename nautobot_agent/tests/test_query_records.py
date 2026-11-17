@@ -1029,28 +1029,30 @@ class QueryEncoderTests(TestCase):
             for (model, label), args in cases.items():
                 with self.subTest(model=model, case=label):
                     self.assert_denied(model, args)
-        with self.subTest("attname and pk aliases of declared"):
-            with patch.object(Location, "sensitive_fields", ("location_type_id", "id"), create=True):
-                cases = {
-                    ("dcim.Location", "declared attname"): {"fields": ["location_type_id"]},
-                    ("dcim.Location", "field name of a declared attname"): {"fields": ["location_type"]},
-                    ("dcim.Location", "relation traversal through a declared attname"): {
-                        "filters": {"location_type__name": "x"}
-                    },
-                    ("dcim.Location", "pk alias of a declared primary key"): {"fields": ["pk"]},
-                    ("dcim.Location", "implicit pk"): {},
-                    ("dcim.Location", "empty fields select pk"): {"fields": []},
-                    ("dcim.Location", "pk lookup"): {"filters": {"pk__in": []}},
-                    ("dcim.Location", "descending pk order"): {"order_by": ["-pk"]},
-                    ("dcim.Location", "declared primary key name"): {"exclude": {"id": "x"}},
-                    ("dcim.Device", "related pk alias"): {"fields": ["location__pk"]},
-                    ("dcim.LocationType", "reverse attname"): {"fields": ["locations__location_type_id"]},
-                }
-                for (model, label), args in cases.items():
-                    with self.subTest(model=model, case=label):
-                        failed(self, call_query({"model": model, **args}, self.superuser), "PermissionDenied")
-                allowed = succeeded(self, call_query({"model": "dcim.Location", "fields": ["name"]}, self.superuser))
-                self.assertTrue(allowed["results"])
+        with (
+            self.subTest("attname and pk aliases of declared"),
+            patch.object(Location, "sensitive_fields", ("location_type_id", "id"), create=True),
+        ):
+            cases = {
+                ("dcim.Location", "declared attname"): {"fields": ["location_type_id"]},
+                ("dcim.Location", "field name of a declared attname"): {"fields": ["location_type"]},
+                ("dcim.Location", "relation traversal through a declared attname"): {
+                    "filters": {"location_type__name": "x"}
+                },
+                ("dcim.Location", "pk alias of a declared primary key"): {"fields": ["pk"]},
+                ("dcim.Location", "implicit pk"): {},
+                ("dcim.Location", "empty fields select pk"): {"fields": []},
+                ("dcim.Location", "pk lookup"): {"filters": {"pk__in": []}},
+                ("dcim.Location", "descending pk order"): {"order_by": ["-pk"]},
+                ("dcim.Location", "declared primary key name"): {"exclude": {"id": "x"}},
+                ("dcim.Device", "related pk alias"): {"fields": ["location__pk"]},
+                ("dcim.LocationType", "reverse attname"): {"fields": ["locations__location_type_id"]},
+            }
+            for (model, label), args in cases.items():
+                with self.subTest(model=model, case=label):
+                    failed(self, call_query({"model": model, **args}, self.superuser), "PermissionDenied")
+            allowed = succeeded(self, call_query({"model": "dcim.Location", "fields": ["name"]}, self.superuser))
+            self.assertTrue(allowed["results"])
         with self.subTest("declarations added to other models are"):
             calls = restrict_spy(self)
             with patch.object(Location, "sensitive_fields", ("time_zone",), create=True):

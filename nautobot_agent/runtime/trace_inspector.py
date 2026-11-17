@@ -110,43 +110,40 @@ class InspectorContext(TypedDict):
     tabs: tuple[tuple[str, str], ...]
 
 
-def _iter_bounded_json(value):
+def _iter_bounded_json(item, encoder):
     """Yield compact JSON while encoding long strings and keys in bounded pieces."""
-    encoder = json_encoder()
-
-    def chunks(item):
-        if isinstance(item, str):
-            yield '"'
-            for start in range(0, len(item), 256):
-                yield json.encoder.encode_basestring(item[start : start + 256])[1:-1]
-            yield '"'
-        elif isinstance(item, dict):
-            yield "{"
-            for index, (key, nested) in enumerate(item.items()):
-                if index:
-                    yield ","
-                yield from chunks(key)
-                yield ":"
-                yield from chunks(nested)
-            yield "}"
-        elif isinstance(item, list):
-            yield "["
-            for index, nested in enumerate(item):
-                if index:
-                    yield ","
-                yield from chunks(nested)
-            yield "]"
-        else:
-            yield from encoder.iterencode(item)
-
-    yield from chunks(value)
+    if isinstance(item, str):
+        yield '"'
+        for start in range(0, len(item), 256):
+            yield json.encoder.encode_basestring(item[start : start + 256])[1:-1]
+        yield '"'
+    elif isinstance(item, dict):
+        yield "{"
+        separator = ""
+        for key, nested in item.items():
+            yield separator
+            yield from _iter_bounded_json(key, encoder)
+            yield ":"
+            yield from _iter_bounded_json(nested, encoder)
+            separator = ","
+        yield "}"
+    elif isinstance(item, list):
+        yield "["
+        separator = ""
+        for nested in item:
+            yield separator
+            yield from _iter_bounded_json(nested, encoder)
+            separator = ","
+        yield "]"
+    else:
+        yield from encoder.iterencode(item)
 
 
 def _preview(value):
     """Return a bounded compact JSON prefix and whether stored JSON continues."""
     remaining = _PREVIEW_LIMIT + 1
     parts = []
-    for chunk in _iter_bounded_json(value):
+    for chunk in _iter_bounded_json(value, json_encoder()):
         take = min(len(chunk), remaining)
         if take:
             parts.append(chunk[:take])
@@ -207,12 +204,25 @@ def _repair_hierarchy(rows):
     by_run = {row["run_id"]: row for row in rows}
     parents = {}
     for row in rows:
-        row["integrity_notice"] = None
         parent = row["parent_run_id"]
-        parents[row["run_id"]] = parent if parent in by_run else None
-        if parent is not None and parent not in by_run:
-            row["integrity_notice"] = "Recorded parent span is missing."
+        missing = parent is not None and parent not in by_run
+        parents[row["run_id"]] = None if missing else parent
+        row["integrity_notice"] = "Recorded parent span is missing." if missing else None
+    _sever_parent_cycles(rows, by_run, parents)
 
+    children = {run_id: [] for run_id in by_run}
+    roots = []
+    for row in rows:
+        run_id = row["run_id"]
+        parent = parents[run_id]
+        row["parent_run_id"] = parent
+        (roots if parent is None else children[parent]).append(run_id)
+
+    return by_run, children, roots
+
+
+def _sever_parent_cycles(rows, by_run, parents):
+    """Cut each parent cycle at its earliest-recorded member, marking the severed row."""
     # Each parent chain is visited once; a gray node identifies a cycle in this walk.
     order = {row["run_id"]: index for index, row in enumerate(rows)}
     done = set()
@@ -227,19 +237,6 @@ def _repair_hierarchy(rows):
             parents[cut] = None
             by_run[cut]["integrity_notice"] = "Parent cycle detected; display edge was severed."
         done.update(path)
-
-    children = {run_id: [] for run_id in by_run}
-    roots = []
-    for row in rows:
-        run_id = row["run_id"]
-        parent = parents[run_id]
-        row["parent_run_id"] = parent
-        if parent is None:
-            roots.append(run_id)
-        else:
-            children[parent].append(run_id)
-
-    return by_run, children, roots
 
 
 def _tree_tokens(by_run, children, roots, span_id) -> list[TreeToken]:

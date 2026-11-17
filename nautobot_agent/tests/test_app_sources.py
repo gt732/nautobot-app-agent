@@ -207,7 +207,7 @@ class AppSourceGraphTestCase(GraphTestCase):  # pylint: disable=too-many-ancesto
         state, _ = self.invoke(graph)
         self.assert_denied(self.tool_results(state["messages"])["wrong-label"])
 
-    def test_grant_transitions_and_superuser_identities(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_grant_transitions_and_superuser_identities(self):  # pylint: disable=too-many-locals
         # Fresh group membership and captured-graph access transitions.
         user = self.user
         group = user.groups.get(name="Source Graph App Readers")
@@ -353,9 +353,8 @@ class AppSourceGraphTestCase(GraphTestCase):  # pylint: disable=too-many-ancesto
         anonymous = AnonymousUser()
         anonymous.is_superuser = True
         for principal in (anonymous, inactive, unsaved, None):
-            with self.subTest(principal=type(principal).__name__):
-                with self.assertRaises(ImproperlyConfigured):
-                    resolve_source_apps(principal, self.catalog)
+            with self.subTest(principal=type(principal).__name__), self.assertRaises(ImproperlyConfigured):
+                resolve_source_apps(principal, self.catalog)
 
     def test_parent_internal_disabled_sibling_and_traversal_paths_are_denied(self):
         outside = self.app_tree.outside

@@ -203,9 +203,11 @@ class ScopeScreenRuntimeOwnershipTests(SimpleTestCase):
         self.retain(self.injected, injected_history)
         self.retain(self.installed, installed_history)
 
-        with self.settings(PLUGINS_CONFIG={"nautobot_agent": {"scope_mode": "conversation"}}):
-            with install_runtime(self.installed):
-                result = self.turn.screen()
+        with (
+            self.settings(PLUGINS_CONFIG={"nautobot_agent": {"scope_mode": "conversation"}}),
+            install_runtime(self.installed),
+        ):
+            result = self.turn.screen()
 
         self.assertEqual(result.allowed, False)
         self.assertEqual(result.anchor_id, "injected-tail")
@@ -256,9 +258,11 @@ class ScopeClassificationTests(TestCase):
         messages = set()
         for label, (model, retained) in rows.items():
             with self.subTest(label):
-                with self.assertLogs("nautobot_agent.scope", level="ERROR") as logs:
-                    with self.assertRaises(ImproperlyConfigured) as caught:
-                        self.classify(model, history=retained)
+                with (
+                    self.assertLogs("nautobot_agent.scope", level="ERROR") as logs,
+                    self.assertRaises(ImproperlyConfigured) as caught,
+                ):
+                    self.classify(model, history=retained)
                 messages.add(str(caught.exception))
                 self.assertNotIn(SECRET, str(caught.exception))
                 self.assertIsNone(caught.exception.__cause__)
@@ -267,9 +271,11 @@ class ScopeClassificationTests(TestCase):
         self.assertEqual(len(messages), 1)  # one static failure regardless of cause
 
         build_error = ImproperlyConfigured("The configuration could not be built.")
-        with runtime_override(model_factory=lambda _configuration: (_ for _ in ()).throw(build_error)):
-            with self.assertRaises(ImproperlyConfigured) as caught:
-                current_runtime().classify_scope("Show my devices")
+        with (
+            runtime_override(model_factory=lambda _configuration: (_ for _ in ()).throw(build_error)),
+            self.assertRaises(ImproperlyConfigured) as caught,
+        ):
+            current_runtime().classify_scope("Show my devices")
         self.assertIs(caught.exception, build_error)
 
         for error_type, code in NORMALIZED_MODEL_FAILURES:
@@ -279,17 +285,21 @@ class ScopeClassificationTests(TestCase):
                     responses=[decision(True)],
                     on_call=lambda *_args, error=error, **_kwargs: (_ for _ in ()).throw(error),
                 )
-                with self.assertLogs("nautobot_agent.scope", level="ERROR") as logs:
-                    with self.assertRaises(ModelFailure) as caught:
-                        self.classify(model)
+                with (
+                    self.assertLogs("nautobot_agent.scope", level="ERROR") as logs,
+                    self.assertRaises(ModelFailure) as caught,
+                ):
+                    self.classify(model)
                 self.assertEqual(caught.exception.code, code)
                 self.assertNotIn(SECRET, str(caught.exception))
                 self.assertNotIn(SECRET, "\n".join(logs.output))
 
         LLMConfiguration.objects.all().delete()
-        with runtime_override(model_factory=lambda _configuration: self.fail("model factory called")):
-            with self.assertRaises(ImproperlyConfigured) as caught:
-                current_runtime().classify_scope("Show my devices")
+        with (
+            runtime_override(model_factory=lambda _configuration: self.fail("model factory called")),
+            self.assertRaises(ImproperlyConfigured) as caught,
+        ):
+            current_runtime().classify_scope("Show my devices")
         self.assertNotIn(str(caught.exception), messages)
 
 
@@ -322,7 +332,7 @@ class ScopeSessionTests(SourceGraphTestCase):  # pylint: disable=too-many-ancest
         super().setUp()
         use_runtime(self, saver=DjangoCheckpointSaver())
 
-    def test_stale_invalid_and_unconfigured_sends_preserve_context(self):  # pylint: disable=too-many-locals
+    def test_stale_sends_preserve_context(self):
         create_configuration()
         references = stale_conversation_references(self.user)
 
@@ -348,46 +358,39 @@ class ScopeSessionTests(SourceGraphTestCase):  # pylint: disable=too-many-ancest
                 self.assertEqual(refusal_conversation.user, self.user)
                 self.assertEqual(client.session[CONVERSATION_KEY], str(refusal_conversation.pk))
 
+    def test_invalid_and_unconfigured_sends_preserve_context(self):
         # Only a classifier row remains, so classification can admit a request that then lacks an Agent default.
         LLMConfiguration.objects.all().delete()
         create_configuration(name="classifier", is_default=False, is_scope_classifier=True)
-        AgentConversation.objects.all().delete()
-        AgentCheckpoint.objects.all().delete()
         existing = create_conversation(self.user)
-        cases = {"invalid": b"{", "unconfigured": json.dumps({"message": "List devices"}).encode()}
 
         for selected in (False, True):
-            for label, body in cases.items():
-                with self.subTest(label, selected=selected):
-                    values = {CONVERSATION_KEY: str(existing.pk)} if selected else {}
-                    client = client_with_session(self, self.user, **values)
+            values = {CONVERSATION_KEY: str(existing.pk)} if selected else {}
+            with self.subTest("invalid", selected=selected):
+                client = client_with_session(self, self.user, **values)
+                response = client.post(
+                    reverse("plugins:nautobot_agent:agent_run_submit"), data=b"{", content_type="application/json"
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("error", response.json())
+                self.assertFalse(AgentCheckpoint.objects.exists())
+                if selected:
+                    self.assertEqual(client.session.get(CONVERSATION_KEY), str(existing.pk))
+                else:
+                    self.assertNotIn(CONVERSATION_KEY, client.session)
 
-                    if label == "invalid":
-                        response = client.post(
-                            reverse("plugins:nautobot_agent:agent_run_submit"),
-                            data=body,
-                            content_type="application/json",
-                        )
-                    else:
-                        with run_dependencies():
-                            response = post_run_message(client, "List devices")
-
-                    if label == "invalid":
-                        self.assertEqual(response.status_code, 400)
-                        self.assertIn("error", response.json())
-                    else:
-                        self.assertEqual(response.status_code, 200)
-                        self.assertEqual(response.json()["status"], "failed")
-                        self.assertTrue(any(event == "error" for event, _ in parse_run_events(response)))
-                    self.assertFalse(AgentCheckpoint.objects.exists())
-                    session = client.session
-                    if selected:
-                        self.assertEqual(session.get(CONVERSATION_KEY), str(existing.pk))
-                    elif label == "invalid":
-                        self.assertNotIn(CONVERSATION_KEY, session)
-                    else:
-                        failed_conversation = AgentConversation.objects.get(pk=response.json()["conversation_id"])
-                        self.assertEqual(session.get(CONVERSATION_KEY), str(failed_conversation.pk))
+            with self.subTest("unconfigured", selected=selected):
+                client = client_with_session(self, self.user, **values)
+                with run_dependencies():
+                    response = post_run_message(client, "List devices")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["status"], "failed")
+                self.assertTrue(any(event == "error" for event, _ in parse_run_events(response)))
+                self.assertFalse(AgentCheckpoint.objects.exists())
+                expected = (
+                    existing if selected else AgentConversation.objects.get(pk=response.json()["conversation_id"])
+                )
+                self.assertEqual(client.session.get(CONVERSATION_KEY), str(expected.pk))
 
 
 class ScopeRoutingTests(SourceGraphTestCase):  # pylint: disable=too-many-ancestors
@@ -632,7 +635,7 @@ class ScopeContinuationTests(DurableSourceGraphTestCase):  # pylint: disable=too
             [(entry["role"], entry["content"]) for entry in classifier_context(classifier.requests[-1])],
             [
                 (role, content)
-                for index in range(0, 2)
+                for index in range(2)
                 for role, content in (("user", requests[index]), ("assistant", answers[index]))
             ],
         )

@@ -454,7 +454,7 @@ class ConfigurationMutationTests(_ConfigurationPageCase):
         query = from_list.removeprefix(self.delete_url(row.pk))
         self.assertRedirects(self.confirm_delete(row.pk, query), self.list_url, fetch_redirect_response=False)
 
-    def test_invalid_submissions_do_not_save(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_invalid_submissions_do_not_save(self):  # pylint: disable=too-many-locals
         self.grant(*ACTIONS)
         page = self.client.get(self.add_url)
         rendered_controls = controls(page).controls
@@ -601,7 +601,7 @@ class AgentConfigurationGraphTests(SourceGraphTestCase):  # pylint: disable=too-
         runtime_graph(self.user)
         self.assertEqual(self.send_message("again"), ["alpha answer", "done"])
 
-    def test_configuration_change_build_failure_recovers_with_history(self):  # pylint: disable=too-many-statements
+    def test_configuration_change_build_failure_recovers_with_history(self):
         self.use_scripted_models()
         row = create_configuration(name="alpha", model="openai:alpha")
         runtime_graph(self.user)
@@ -609,12 +609,14 @@ class AgentConfigurationGraphTests(SourceGraphTestCase):  # pylint: disable=too-
 
         row.model = "openai:beta"
         row.save()
-        with patch(
-            "nautobot_agent.runtime.agent.create_deep_agent",
-            side_effect=RuntimeError("graph construction failed"),
+        with (
+            patch(
+                "nautobot_agent.runtime.agent.create_deep_agent",
+                side_effect=RuntimeError("graph construction failed"),
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                runtime_graph(self.user)
+            runtime_graph(self.user)
 
         runtime_graph(self.user)
         self.assertEqual(self.send_message("after retry"), ["beta answer", "done"])

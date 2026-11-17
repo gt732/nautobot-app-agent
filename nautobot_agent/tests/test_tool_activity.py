@@ -62,7 +62,7 @@ class ToolActivityGraphTestCase(SourceGraphTestCase):  # pylint: disable=too-man
         """Return the restored page history for a client."""
         return page_json((client or self.client).get(reverse(PAGE_URL)), "agent-state")["history"]
 
-    def test_live_and_restored_outcomes(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_live_and_restored_outcomes(self):  # pylint: disable=too-many-locals
         """Final outcomes restore correctly, and reused native IDs stay independent."""
         read_args = {"file_path": "/nautobot/models.py", "limit": 3}
         plan = [{"content": "Inspect", "status": "in_progress"}]

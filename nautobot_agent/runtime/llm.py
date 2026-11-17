@@ -43,6 +43,6 @@ def build_chat_model(config: LLMConfiguration) -> BaseChatModel:
     except ImportError:
         logger.error("LLM integration package unavailable (ImportError)")
         raise ImproperlyConfigured("The LLM provider integration package is not installed.") from None
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # provider constructors raise arbitrary types; expose only a static configuration error
         logger.error("LLM model construction failed (%s)", type(exc).__name__)
         raise ImproperlyConfigured("The LLM model could not be constructed from its configuration.") from None

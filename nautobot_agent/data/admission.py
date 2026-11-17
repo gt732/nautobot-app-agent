@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from functools import cache, partial
 from typing import Any, cast
 
 from django.db.models import (
@@ -107,35 +108,23 @@ def describe(model: type[Model]) -> dict[str, Any]:
     reject_internal_target(model)
     reject_blocked_target(model)
     opts = meta(model)
-    fields: list[dict[str, Any]] = []
-    relationships: list[dict[str, Any]] = []
-    for field in opts.get_fields():
-        if field.concrete and not field.many_to_many:
-            if path_denial(resolve_path(model, field.name)) is None:
-                record = {
-                    "name": field.name,
-                    "type": type(field).__name__,
-                    "null": bool(field.null),
-                }
-                if field.attname != field.name:
-                    record["attname"] = field.attname
-                target = getattr(field, "related_model", None)
-                if target is not None and isinstance(target, type) and issubclass(target, Model):
-                    record["related_model"] = cast(Any, target)._meta.label
-                fields.append(record)
-
-        resolved_relation = standard_relation(field)
-        if resolved_relation is not None and path_denial(resolve_path(model, resolved_relation.query_name)) is None:
-            relationships.append(
-                {
-                    "accessor": resolved_relation.accessor,
-                    "query_name": resolved_relation.query_name,
-                    "related_model": cast(Any, resolved_relation.target)._meta.label,
-                    "kind": resolved_relation.kind,
-                    "many": resolved_relation.many,
-                }
-            )
-
+    fields = [
+        _field_metadata(field)
+        for field in opts.get_fields()
+        if field.concrete and not field.many_to_many and path_denial(resolve_path(model, field.name)) is None
+    ]
+    relations = (standard_relation(field) for field in opts.get_fields())
+    relationships = [
+        {
+            "accessor": relation.accessor,
+            "query_name": relation.query_name,
+            "related_model": cast(Any, relation.target)._meta.label,
+            "kind": relation.kind,
+            "many": relation.many,
+        }
+        for relation in relations
+        if relation is not None and path_denial(resolve_path(model, relation.query_name)) is None
+    ]
     fields.sort(key=lambda item: item["name"])
     relationships.sort(key=lambda item: (item["accessor"], item["query_name"], item["related_model"], item["kind"]))
     return {
@@ -144,6 +133,17 @@ def describe(model: type[Model]) -> dict[str, Any]:
         "fields": fields,
         "relationships": relationships,
     }
+
+
+def _field_metadata(field: Any) -> dict[str, Any]:
+    """Project one concrete field's public metadata."""
+    record = {"name": field.name, "type": type(field).__name__, "null": bool(field.null)}
+    if field.attname != field.name:
+        record["attname"] = field.attname
+    target = getattr(field, "related_model", None)
+    if isinstance(target, type) and issubclass(target, Model):
+        record["related_model"] = cast(Any, target)._meta.label
+    return record
 
 
 def _admit_paths(model: type[Model], requested_paths: Sequence[str]) -> dict[str, ResolvedPath]:
@@ -231,31 +231,33 @@ def validate_comparisons(condition: QueryConditionInput | None, root: AdmittedRo
 
 def _require_predicate_permissions(user: Any, paths: Sequence[ResolvedPath]) -> None:
     """Authorize predicate hops independently of permission-masked projection paths."""
-    grants = {}
+    grant_for = cache(partial(_grant, user=user, action="view"))
     for path in paths:
         for index, field in enumerate(path.iter_fields()):
             related = getattr(field, "related_model", None)
             if related is None:
                 continue
-            if related not in grants:
-                grants[related] = _grant(related, user, "view")
-            if grants[related] is False:
+            grant = grant_for(related)
+            if grant is False:
                 raise tool_error(
                     "PermissionDenied",
                     f"Missing view permission for related model {meta(related).label}.",
                 )
-            if grants[related] is True:
+            if grant is True or _stops_at_local_key(field, path.parts[index + 1 :]):
                 continue
-            remaining = path.parts[index + 1 :]
-            if isinstance(field, ForeignKey) and field.concrete:
-                if remaining and remaining[0] in ("pk", meta(related).pk.name, field.target_field.name):
-                    remaining = remaining[1:]
-                if remaining in ((), ("exact",), ("in",), ("isnull",)):
-                    continue
             raise tool_error(
                 "PermissionDenied",
                 f"Filtering related fields of {meta(related).label} requires unrestricted view permission.",
             )
+
+
+def _stops_at_local_key(field: Any, remaining: tuple[str, ...]) -> bool:
+    """Return whether a predicate through a concrete FK compares only its stored key, without joining the target."""
+    if not (isinstance(field, ForeignKey) and field.concrete):
+        return False
+    if remaining and remaining[0] in ("pk", meta(field.related_model).pk.name, field.target_field.name):
+        remaining = remaining[1:]
+    return remaining in ((), ("exact",), ("in",), ("isnull",))
 
 
 def admit_root(

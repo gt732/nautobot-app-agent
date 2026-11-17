@@ -460,7 +460,7 @@ class MCPLaunchSeamTests(SimpleTestCase):
 
             async def close(self):
                 """Confirm cleanup after partial entry."""
-                return None
+                return
 
         def create_client(_handler):
             client = FailedEntry()

@@ -1,11 +1,9 @@
 """Temporary source trees and App-discovery test fixtures."""
 
 import os
-import sys
 import tempfile
 import zipfile
 from contextlib import contextmanager
-from importlib import import_module
 from pathlib import Path
 from shutil import rmtree
 from types import ModuleType
@@ -117,28 +115,10 @@ def snapshot_tree(root: Path) -> dict:
     return entries
 
 
-def remove_link(link: Path) -> None:
-    """Remove a symlink or junction itself, never what it points to."""
-    if sys.platform == "win32" and link.is_dir():
-        os.rmdir(link)
-    else:
-        link.unlink()
-
-
-def create_link(case, link: Path, target: Path, *, junction: bool = False) -> None:
-    """Create a symlink or junction, skipping the test when the platform or privileges do not allow it."""
-    kind = "junction" if junction else "symlink"
-    try:
-        if junction:
-            if sys.platform == "win32":
-                import_module("_winapi").CreateJunction(str(target), str(link))
-            else:
-                case.skipTest("Windows junctions require Windows.")
-        else:
-            link.symlink_to(target, target_is_directory=target.is_dir())
-    except (OSError, NotImplementedError, AttributeError) as error:
-        case.skipTest(f"Creating a {kind} is unavailable here ({type(error).__name__}); link coverage skipped.")
-    case.addCleanup(remove_link, link)
+def create_link(case, link: Path, target: Path) -> None:
+    """Create a symlink removed at cleanup; unlinking never touches what it points to."""
+    link.symlink_to(target, target_is_directory=target.is_dir())
+    case.addCleanup(link.unlink)
 
 
 class AppTree(NamedTuple):

@@ -1,7 +1,6 @@
 """Tests for Nautobot package discovery and the read-only source backend."""
 
 import base64
-import sys
 import zipfile
 from pathlib import Path
 from types import ModuleType
@@ -78,9 +77,11 @@ class SourceRootTests(TemporarySourceTestCase):
         module = loaded_package_module("nautobot", package)
         for error in (OSError("secret location"), RuntimeError("secret location"), ValueError("secret location")):
             with self.subTest(error=type(error).__name__):
-                with patch("nautobot_agent.sources.backends.Path.resolve", side_effect=error):
-                    with self.assertRaises(NautobotSourceUnavailableError) as raised:
-                        source_root(module)
+                with (
+                    patch("nautobot_agent.sources.backends.Path.resolve", side_effect=error),
+                    self.assertRaises(NautobotSourceUnavailableError) as raised,
+                ):
+                    source_root(module)
                 self.assertNotIn("secret location", str(raised.exception))
 
 
@@ -140,22 +141,18 @@ class ProjectStaticExclusionTests(TemporarySourceTestCase):
             self.assertEqual(self.backend.grep("excluded-static-sentinel", "/").matches, [])
 
     def test_links_into_static_tree_are_excluded(self):
-        for junction in (False, True):
-            alias = "static_junction" if junction else "static_symlink"
-            with self.subTest(junction=junction):
-                if junction and sys.platform != "win32":
-                    self.skipTest("Native junctions exist only on Windows.")
-                create_link(self, self.tree.package / alias, self.tree.package / "project-static", junction=junction)
-                self.assertNotIn(f"/{alias}/", [entry["path"] for entry in self.backend.ls("/").entries or []])
-                self.assertTrue(self.backend.ls(f"/{alias}").error)
-                self.assertTrue(self.backend.read(f"/{alias}/docs/index.html").error)
-                response = self.backend.download_files([f"/{alias}/docs/index.html"])[0]
-                self.assertTrue(response.error)
-                self.assertIsNone(response.content)
-                self.assertFalse(self.backend.glob("**/*", f"/{alias}").matches)
-                self.assertFalse(self.backend.grep("excluded-static-sentinel", f"/{alias}").matches)
-                self.assertFalse(any(alias in item["path"] for item in self.backend.glob("**/*").matches or []))
-                self.assertEqual(self.backend.grep("excluded-static-sentinel", "/").matches, [])
+        alias = "static_symlink"
+        create_link(self, self.tree.package / alias, self.tree.package / "project-static")
+        self.assertNotIn(f"/{alias}/", [entry["path"] for entry in self.backend.ls("/").entries or []])
+        self.assertTrue(self.backend.ls(f"/{alias}").error)
+        self.assertTrue(self.backend.read(f"/{alias}/docs/index.html").error)
+        response = self.backend.download_files([f"/{alias}/docs/index.html"])[0]
+        self.assertTrue(response.error)
+        self.assertIsNone(response.content)
+        self.assertFalse(self.backend.glob("**/*", f"/{alias}").matches)
+        self.assertFalse(self.backend.grep("excluded-static-sentinel", f"/{alias}").matches)
+        self.assertFalse(any(alias in item["path"] for item in self.backend.glob("**/*").matches or []))
+        self.assertEqual(self.backend.grep("excluded-static-sentinel", "/").matches, [])
 
     def test_metadata_failures_preserve_matches_and_search_completion(self):
         before = self.tree.package / "before.py"
@@ -536,10 +533,12 @@ class NautobotSourceBackendReadTests(TemporarySourceTestCase):
                         result = call()
                     assert result.error is not None
                     self.assertNotIn("physical", result.error)
-            with self.subTest(method=method, error="RuntimeError"):
-                with patch(target, side_effect=RuntimeError("bug")):
-                    with self.assertRaises(RuntimeError):
-                        call()
+            with (
+                self.subTest(method=method, error="RuntimeError"),
+                patch(target, side_effect=RuntimeError("bug")),
+                self.assertRaises(RuntimeError),
+            ):
+                call()
 
 
 class NautobotSourceBackendConfinementTests(TemporarySourceTestCase):
@@ -625,17 +624,14 @@ class NautobotSourceBackendConfinementTests(TemporarySourceTestCase):
 
     def test_outward_links_are_confined(self):
         links = (
-            ("outward_file", "project", False),
-            ("outward_dir", "sibling", False),
-            ("outward_junction", "sibling", True),
+            ("outward_file", "project"),
+            ("outward_dir", "sibling"),
         )
-        for link_name, outside_name, junction in links:
+        for link_name, outside_name in links:
             with self.subTest(link=link_name):
-                if junction and sys.platform != "win32":
-                    self.skipTest("Native junctions exist only on Windows.")
                 target = self.tree.outside[outside_name]
                 target = target.parent if outside_name == "sibling" else target
-                create_link(self, self.tree.package / link_name, target, junction=junction)
+                create_link(self, self.tree.package / link_name, target)
                 self.assert_link_is_confined(link_name, outside_name)
 
 

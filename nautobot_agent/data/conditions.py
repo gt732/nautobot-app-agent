@@ -45,17 +45,13 @@ ROOT_CONDITION_VALUE_ERROR_GUIDANCE: dict[tuple[str | int | None, ...], dict[str
 }
 
 
-def _precheck_condition_tree(value: Any) -> Any:
+def _precheck_condition_tree(value: Any) -> Any:  # pylint: disable=too-cognitively-complex  # one bounded walk enforcing three limits in document order
     """Bound raw condition structure before recursive model validation."""
-    stack: list[tuple[Iterator[Any], int]] = [(iter((value,)), 0)]
+    # Children are pushed reversed so nodes are visited in document order (left-to-right preorder).
+    stack: list[tuple[Any, int]] = [(value, 0)]
     nodes = entries = 0
     while stack:
-        try:
-            children, depth = stack[-1]
-            node = next(children)
-        except StopIteration:
-            stack.pop()
-            continue
+        node, depth = stack.pop()
         if not isinstance(node, dict):
             continue
         nodes += 1
@@ -70,14 +66,14 @@ def _precheck_condition_tree(value: Any) -> Any:
         for operator in ("and", "or", "not"):
             if operator not in node:
                 continue
-            next_depth = depth + 1
-            if next_depth > MAX_BOOLEAN_DEPTH:
+            if depth + 1 > MAX_BOOLEAN_DEPTH:
                 raise ValueError(CONDITION_DEPTH_LIMIT_MESSAGE)
             children = node[operator]
             if operator == "not":
-                stack.append((iter((children,)), next_depth))
-            elif isinstance(children, list):
-                stack.append((iter(children), next_depth))
+                children = [children]
+            elif not isinstance(children, list):
+                continue
+            stack.extend((child, depth + 1) for child in reversed(children))
     return value
 
 

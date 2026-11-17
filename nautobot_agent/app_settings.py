@@ -315,31 +315,32 @@ def blocked_models() -> tuple[str, ...]:
     if not configured:
         return ()
     registry = {config.label.lower(): config for config in apps.get_app_configs()}
-    normalized = []
-    for label in configured:
-        if not isinstance(label, str) or label.count(".") != 1:
-            raise ImproperlyConfigured(_BLOCKED_MODELS_DIAGNOSTIC)
-        app_label, model_name = label.lower().split(".")
-        config = registry.get(app_label)
-        try:
-            model = config.get_model(model_name) if config is not None else None
-        except LookupError:
-            model = None
-        if model is None:
-            raise ImproperlyConfigured(_BLOCKED_MODELS_DIAGNOSTIC)
-        if model._meta.swapped:
-            replacement = model._meta.swapped
-            raise ImproperlyConfigured(
-                f"PLUGINS_CONFIG['nautobot_agent']['blocked_models'] names a swapped model; configure its replacement "
-                f"'{replacement}' instead."
-            )
-        if model._meta.proxy:
-            raise ImproperlyConfigured(
-                "PLUGINS_CONFIG['nautobot_agent']['blocked_models'] cannot name a proxy model; configure its concrete "
-                f"model '{model._meta.concrete_model._meta.label}' instead."
-            )
-        normalized.append(model._meta.label)
-    return tuple(dict.fromkeys(normalized))
+    return tuple(dict.fromkeys(_blocked_model_label(label, registry) for label in configured))
+
+
+def _blocked_model_label(label: Any, registry: dict[str, Any]) -> str:
+    """Resolve one configured label to its installed, concrete, non-swapped model label."""
+    if not isinstance(label, str) or label.count(".") != 1:
+        raise ImproperlyConfigured(_BLOCKED_MODELS_DIAGNOSTIC)
+    app_label, model_name = label.lower().split(".")
+    config = registry.get(app_label)
+    try:
+        model = config.get_model(model_name) if config is not None else None
+    except LookupError:
+        model = None
+    if model is None:
+        raise ImproperlyConfigured(_BLOCKED_MODELS_DIAGNOSTIC)
+    if model._meta.swapped:
+        raise ImproperlyConfigured(
+            f"PLUGINS_CONFIG['nautobot_agent']['blocked_models'] names a swapped model; configure its replacement "
+            f"'{model._meta.swapped}' instead."
+        )
+    if model._meta.proxy:
+        raise ImproperlyConfigured(
+            "PLUGINS_CONFIG['nautobot_agent']['blocked_models'] cannot name a proxy model; configure its concrete "
+            f"model '{model._meta.concrete_model._meta.label}' instead."
+        )
+    return model._meta.label
 
 
 @dataclass(frozen=True)

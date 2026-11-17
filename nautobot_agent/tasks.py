@@ -10,7 +10,7 @@ from nautobot_agent.app_settings import CHAT_RUN_SHUTDOWN_MARGIN
 from nautobot_agent.chat.execution import execute_run
 
 
-def publish_run(  # pylint: disable=too-many-arguments
+def publish_run(  # noqa: PLR0913  # implements the RunPublisher protocol signature
     run_id: UUID,
     user_id: UUID,
     queue: str | None,
@@ -30,18 +30,17 @@ def publish_run(  # pylint: disable=too-many-arguments
             "max_retries": 0,
         },
     )
-    with connection:
-        with connection.Producer(serializer=app.conf.task_serializer) as producer:
-            execute_chat_run.apply_async(
-                args=(str(run_id),),
-                producer=producer,
-                queue=queue,
-                soft_time_limit=soft + cleanup + CHAT_RUN_SHUTDOWN_MARGIN,
-                time_limit=hard,
-                serializer=app.conf.task_serializer,
-                retry=False,
-                nautobot_job_user_id=str(user_id),
-            )
+    with connection, connection.Producer(serializer=app.conf.task_serializer) as producer:
+        execute_chat_run.apply_async(
+            args=(str(run_id),),
+            producer=producer,
+            queue=queue,
+            soft_time_limit=soft + cleanup + CHAT_RUN_SHUTDOWN_MARGIN,
+            time_limit=hard,
+            serializer=app.conf.task_serializer,
+            retry=False,
+            nautobot_job_user_id=str(user_id),
+        )
 
 
 @nautobot_task(

@@ -38,7 +38,7 @@ from nautobot_agent.tests.support.chat import (
 from nautobot_agent.tests.support.data import build_fixtures, grant
 from nautobot_agent.tests.support.graph import SourceGraphTestCase
 from nautobot_agent.tools.monty.bridge import invoke_query_tool
-from nautobot_agent.tools.monty.driver import _os_payload, run_eval_python
+from nautobot_agent.tools.monty.driver import _resume_os_call, run_eval_python
 from nautobot_agent.tools.monty.middleware import InterpreterMiddleware
 from nautobot_agent.tools.monty.results import _tagged, jsonable_output
 
@@ -428,11 +428,20 @@ class MontyExecutionTests(SimpleTestCase):
         self.assertEqual(seen, [])
 
     def test_os_handler_exception_and_not_handled(self):
-        progress = cast(Any, SimpleNamespace(function_name="getenv", args=("SECRET",), kwargs={}))
+        progress = cast(
+            Any,
+            SimpleNamespace(
+                function_name="getenv",
+                args=("SECRET",),
+                kwargs={},
+                resume=lambda payload: payload,
+                resume_not_handled=lambda: "not handled",
+            ),
+        )
 
         def fail(**_kwargs) -> Any:
             raise PermissionError("host access denied")
 
-        exception_payload = cast(Any, _os_payload(progress, cast(Any, fail)))
+        exception_payload = cast(Any, _resume_os_call(progress, cast(Any, fail)))
         self.assertIsInstance(exception_payload["exception"], PermissionError)
-        self.assertIsNone(_os_payload(progress, cast(Any, lambda **_kwargs: NOT_HANDLED)))
+        self.assertEqual(_resume_os_call(progress, cast(Any, lambda **_kwargs: NOT_HANDLED)), "not handled")

@@ -23,7 +23,6 @@ from langgraph.errors import GraphBubbleUp
 from pydantic_monty import (
     NOT_HANDLED,
     CollectString,
-    ExternalResult,
     FunctionSnapshot,
     Monty,
     MontyComplete,
@@ -34,6 +33,7 @@ from pydantic_monty import (
     OSAccess,
     OsFunction,
     ResourceLimits,
+    SyncSnapshot,
 )
 
 from nautobot_agent.app_settings import InterpreterLimits
@@ -81,8 +81,8 @@ def _exception_error(exc: Exception, code: str) -> dict[str, Any]:
     return error_result(error_type, message, traceback=traceback_text, code=code)
 
 
-def _os_payload(progress: FunctionSnapshot, os_handler: OSAccess) -> ExternalResult | None:
-    """Answer a sandbox OS call from the empty virtual OS; ``None`` means not handled.
+def _resume_os_call(progress: FunctionSnapshot, os_handler: OSAccess) -> SyncSnapshot:
+    """Answer a sandbox OS call from the empty virtual OS and resume the sandbox.
 
     Monty consults ``os=`` only from ``resume_auto()``, so a manually driven feed
     dispatches OS calls itself. A raising handler is reported to the sandbox.
@@ -96,11 +96,11 @@ def _os_payload(progress: FunctionSnapshot, os_handler: OSAccess) -> ExternalRes
         )
     except (GraphBubbleUp, SoftTimeLimitExceeded):
         raise
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        return {"exception": exc}
+    except Exception as exc:  # noqa: BLE001  # sandbox OS failures resume as exceptions
+        return progress.resume({"exception": exc})
     if value is NOT_HANDLED:
-        return None
-    return {"return_value": value}
+        return progress.resume_not_handled()
+    return progress.resume({"return_value": value})
 
 
 def run_eval_python(code: str, limits: InterpreterLimits, runtime: ToolRuntime, tool: BaseTool) -> dict[str, Any]:
@@ -114,61 +114,62 @@ def run_eval_python(code: str, limits: InterpreterLimits, runtime: ToolRuntime, 
     """
     try:
         stubs = render_type_stubs(tool)
-
-        def host_tool(*_args: Any, **_kwargs: Any) -> Any:
-            # Only its name crosses into Monty; dispatch must use the guarded bridge below.
-            raise RuntimeError("sandbox host-function stand-in must not execute")
-
-        host_tool.__name__ = tool.name
-        with Monty(min_processes=1, max_processes=1) as pool:
-            with pool.checkout(
+        with (
+            Monty(min_processes=1, max_processes=1) as pool,
+            pool.checkout(
                 limits=_resource_limits(limits),
                 type_check=True,
                 type_check_stubs=stubs,
                 type_check_format="concise",
                 os_policy={"sleep": "zero"},
-            ) as session:
-                stdout = CollectString()
-                # Empty virtual filesystem and environment; no mounts or real OS access.
-                os_handler = OSAccess(max_sleep=0)
-                host_calls = 0
-                progress = session.feed_start(code, print_callback=stdout, os=os_handler)
-                while not isinstance(progress, MontyComplete):
-                    if isinstance(progress, NameLookupSnapshot):
-                        if progress.object_id is None and progress.variable_name == tool.name:
-                            progress = progress.resume(value=host_tool)
-                        else:
-                            progress = progress.resume()
-                        continue
-                    if not isinstance(progress, FunctionSnapshot):
-                        return error_result(
-                            "RuntimeError",
-                            f"unsupported sandbox progress {type(progress).__name__}; use plain synchronous code",
-                            code=code,
-                        )
-                    if progress.is_os_function:
-                        payload = _os_payload(progress, os_handler)
-                        progress = progress.resume_not_handled() if payload is None else progress.resume(payload)
-                        continue
-                    if progress.function_name != tool.name:
-                        progress = progress.resume(
-                            {
-                                "exc_type": "RuntimeError",
-                                "message": (
-                                    f"host function {progress.function_name!r} is not available; "
-                                    f"available: [{tool.name!r}]"
-                                ),
-                            }
-                        )
-                        continue
-                    host_calls += 1
-                    if host_calls > limits.max_host_calls:
-                        return _budget_error(limits.max_host_calls, code)
-                    progress = progress.resume(invoke_query_tool(tool, progress.args, progress.kwargs, runtime))
-                # The final value converts on access and stdout lives in the session's
-                # worker callbacks: read both before the session is released.
-                return success_result(progress.output, stdout.output or "")
+            ) as session,
+        ):
+            return _drive_session(session, code, limits, runtime, tool)
     except (GraphBubbleUp, SoftTimeLimitExceeded):
         raise
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # user-code and worker failures become the tool's error envelope
         return _exception_error(exc, code)
+
+
+def _drive_session(
+    session, code: str, limits: InterpreterLimits, runtime: ToolRuntime, tool: BaseTool
+) -> dict[str, Any]:
+    """Feed ``code`` to a checked-out session, answering each snapshot until it completes."""
+
+    def host_tool(*_args: Any, **_kwargs: Any) -> Any:
+        # Only its name crosses into Monty; dispatch must use the guarded bridge below.
+        raise RuntimeError("sandbox host-function stand-in must not execute")
+
+    host_tool.__name__ = tool.name
+    stdout = CollectString()
+    # Empty virtual filesystem and environment; no mounts or real OS access.
+    os_handler = OSAccess(max_sleep=0)
+    host_calls = 0
+    progress = session.feed_start(code, print_callback=stdout, os=os_handler)
+    while not isinstance(progress, MontyComplete):
+        if isinstance(progress, NameLookupSnapshot):
+            is_tool = progress.object_id is None and progress.variable_name == tool.name
+            progress = progress.resume(value=host_tool) if is_tool else progress.resume()
+        elif not isinstance(progress, FunctionSnapshot):
+            return error_result(
+                "RuntimeError",
+                f"unsupported sandbox progress {type(progress).__name__}; use plain synchronous code",
+                code=code,
+            )
+        elif progress.is_os_function:
+            progress = _resume_os_call(progress, os_handler)
+        elif progress.function_name != tool.name:
+            progress = progress.resume(
+                {
+                    "exc_type": "RuntimeError",
+                    "message": f"host function {progress.function_name!r} is not available; available: [{tool.name!r}]",
+                }
+            )
+        elif host_calls >= limits.max_host_calls:
+            return _budget_error(limits.max_host_calls, code)
+        else:
+            host_calls += 1
+            progress = progress.resume(invoke_query_tool(tool, progress.args, progress.kwargs, runtime))
+    # The final value converts on access and stdout lives in the session's
+    # worker callbacks: read both before the session is released.
+    return success_result(progress.output, stdout.output or "")

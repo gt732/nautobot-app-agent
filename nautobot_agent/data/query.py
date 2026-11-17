@@ -212,20 +212,14 @@ def _having_lookup_value(field: ModelField, lookup: str, value: Any, key: str) -
     if value is None and lookup in {"gt", "gte", "lt", "lte"}:
         raise tool_error("ValidationError", f"The having threshold for {key!r} cannot be null; use exact or isnull.")
     if lookup == "isnull":
-        valid = isinstance(value, bool)
-        values = ()
-    elif lookup == "in":
-        valid = isinstance(value, list)
-        values = value if valid else ()
-    elif lookup == "range":
-        valid = isinstance(value, list) and len(value) == 2
-        values = value if valid else ()
-    else:
-        valid = True
-        values = (value,)
-    if not valid:
-        expected = "a strict boolean" if lookup == "isnull" else ("an array" if lookup == "in" else "a two-item array")
-        raise tool_error("ValidationError", f"The having value for {key!r} must be {expected}.")
+        if not isinstance(value, bool):
+            raise tool_error("ValidationError", f"The having value for {key!r} must be a strict boolean.")
+        return
+    if lookup == "in" and not isinstance(value, list):
+        raise tool_error("ValidationError", f"The having value for {key!r} must be an array.")
+    if lookup == "range" and not (isinstance(value, list) and len(value) == 2):
+        raise tool_error("ValidationError", f"The having value for {key!r} must be a two-item array.")
+    values = value if lookup in {"in", "range"} else (value,)
     try:
         for item in values:
             field.get_prep_value(item)
@@ -359,10 +353,7 @@ class _QueryProjection:
             serialized_row = {}
             for alias, value in row.items():
                 public_name = public_names.get(alias, alias)
-                if alias in brief_maps:
-                    resolved_value = brief_maps[alias][value]
-                else:
-                    resolved_value = value
+                resolved_value = brief_maps[alias][value] if alias in brief_maps else value
                 serialized_row[public_name] = resolved_value
             serialized_rows.append(serialized_row)
         return serialized_rows
@@ -470,13 +461,13 @@ def _list_order_terms(
     return order_terms, [*public_orders, "pk"]
 
 
-def _admit_list(request: QueryInput, root: AdmittedRoot) -> _AdmittedListQuery:  # pylint: disable=too-many-locals
-    public_fields = tuple(request.fields or ["pk"])
-    public_orders = tuple(request.order_by or [])
+def _admit_list_paths(request: QueryInput, root: AdmittedRoot, public_fields: tuple[str, ...]) -> list[ResolvedPath]:
+    """Reject list fields and ordering terms the list mode cannot return or continue; return resolved fields."""
+    public_orders = request.order_by or []
     for path in (*public_fields, *public_orders):
         normalized = path.removeprefix("-")
         _reject_relations(root.resolve(normalized), normalized, _LIST_RELATION_PATH_MESSAGE)
-    resolved_fields = tuple(root.resolve(path) for path in public_fields)
+    resolved_fields = [root.resolve(path) for path in public_fields]
     for path in resolved_fields:
         reject_blocked_output(path)
     for path in resolved_fields:
@@ -484,16 +475,21 @@ def _admit_list(request: QueryInput, root: AdmittedRoot) -> _AdmittedListQuery: 
             isinstance(field, BinaryField) and not isinstance(field, VarbinaryIPField) for field in path.iter_fields()
         ):
             raise tool_error("ValidationError", f"The path {path.path!r} contains binary data and cannot be returned.")
-    keyset = request.distinct and list(public_orders) in (["pk"], ["-pk"]) and "pk" in public_fields
-    if any(term == "?" for term in public_orders):
+    if "?" in public_orders:
         raise tool_error("ValidationError", "Random ordering cannot be continued.")
-    if request.distinct:
-        for term in public_orders:
-            if term.removeprefix("-") not in public_fields:
-                raise tool_error(
-                    "ValidationError", f"The ordering term {term!r} must name a projected field when distinct is true."
-                )
+    unprojected = next((term for term in public_orders if term.removeprefix("-") not in public_fields), None)
+    if request.distinct and unprojected is not None:
+        raise tool_error(
+            "ValidationError", f"The ordering term {unprojected!r} must name a projected field when distinct is true."
+        )
+    return resolved_fields
 
+
+def _admit_list(request: QueryInput, root: AdmittedRoot) -> _AdmittedListQuery:
+    public_fields = tuple(request.fields or ["pk"])
+    public_orders = tuple(request.order_by or [])
+    resolved_fields = _admit_list_paths(request, root, public_fields)
+    keyset = request.distinct and list(public_orders) in (["pk"], ["-pk"]) and "pk" in public_fields
     projection = _QueryProjection(root.user, _reserved_names(root.model) | set(public_fields) | set(public_orders))
     for path in resolved_fields:
         projection.select(path)
@@ -756,9 +752,6 @@ def execute_query(request: QueryInput) -> dict[str, Any]:
     queryset = plan.root.restricted_queryset()
     with orm_errors():
         if plan.mode == "count":
-            if plan.distinct:
-                count = queryset.order_by().values("pk").distinct().count()
-            else:
-                count = queryset.count()
+            count = queryset.order_by().values("pk").distinct().count() if plan.distinct else queryset.count()
             return {"model": plan.root.label, "count": count}
         return {"model": plan.root.label, "exists": queryset.exists()}

@@ -50,9 +50,11 @@ dev = [
     # Official checkpointer conformance suite; the dev extra runs it through ordinary Django tests.
     "langgraph-checkpoint-conformance==0.0.2",
     "invoke",
-    "pylint",
-    "pylint-django>=2.5.4",
-    "pylint-nautobot>=0.3.1",
+    "pylint>=4.1.1,<5",
+    "pylint-django>=2.8.0,<3",
+    "pylint-nautobot>=1.1.0,<2",
+    # Cognitive-complexity checker (too-cognitively-complex); requires pylint>=4.1.1.
+    "pylint-cognitive-complexity==0.1.1",
     "ruff==0.17.3",
     "ty==0.0.94",
     # Python implementation of markdownlint
@@ -84,27 +86,35 @@ mkdocs-glightbox = "~0.5.2"
 
 [tool.pylint.main]
 # Include the pylint_django plugin to avoid spurious warnings about Django patterns
-load-plugins = "pylint_django, pylint_nautobot"
+# pylint_cognitive_complexity adds too-cognitively-complex, the single blocking complexity gate;
+# branches/arguments/statements limits are enforced by Ruff; the remaining size limits stay at Pylint defaults.
+load-plugins = "pylint_django, pylint_nautobot, pylint_cognitive_complexity"
 ignore = ".venv,.dev"
 
 [tool.pylint.basic]
 # No docstrings required for private methods (Pylint default), or for test_ functions, or for inner Meta classes.
 no-docstring-rgx = "^(_|test_|Meta$)"
 
+[tool.pylint.cognitive-complexity]
+# Outlier alarm, not a style target: do not split code into helpers solely to satisfy it.
+max-cognitive-complexity = 15
+
 [tool.pylint.messages_control]
-# Pylint is kept for Django/Nautobot-aware and refactoring checks only; the
-# general pyflakes/pycodestyle-class rules are already covered faster by ruff
-# (F/E/W in [tool.ruff.lint].select). Disables map ruff rule families to the
-# equivalent pylint messages:
-#   F401/F403/F405 -> unused-import, wildcard-import, unused-wildcard-import
-#   A001/A002      -> redefined-builtin
-#   F841           -> unused-variable
-#   E711/E712      -> singleton-comparison
-#   F632           -> comparison-of-constants
-#   F706/F707      -> return-outside-function, return-arg-in-generator
-#   B011/B017      -> assert-on-string-literal, assert-on-tuple
-#   W291/W292/W293/W605 and line endings -> trailing-whitespace,
-#   missing-final-newline, invalid-character-*, mixed/unexpected-line-ending
+# Pylint owns cognitive complexity, inference (no-member, call arguments), cross-module
+# checks (cyclic-import, duplicate-code), Django/Nautobot plugin checks, and checks
+# without a stable Ruff equivalent (nested blocks, locals, boolean expressions,
+# return statements, instance attributes, used-before-assignment).
+# Messages below are owned by Ruff rules selected in [tool.ruff.lint], per Ruff's
+# Pylint parity tracker (astral-sh/ruff#970); detection details may differ:
+#   F    -> undefined/redefined names, unused imports/variables, format strings, literal-comparison
+#   E/W  -> bare-except, imports position, statements, trailing whitespace, backslash escapes
+#   B    -> defaults, loop closures, duplicate except/value, lost-exception, raise-missing-from
+#   D/I  -> docstrings, import order/grouping;  S -> eval/exec;  A -> redefined-builtin
+#   S113 -> missing-timeout;  UP031/UP032 -> consider-using-f-string;  PIE790 -> unnecessary-ellipsis
+#   SIM/RET/C4/UP/PIE/BLE -> simplifications, negations, else-after-return, comprehensions, modern syntax
+#   PL*  -> design limits (branches/arguments/statements), constant and string-literal
+#           asserts, invalid characters
+# Line endings and trailing newlines are normalized by `ruff format`. positional-arguments and line length are not enforced.
 disable = """,
     line-too-long,
     too-many-positional-arguments,
@@ -117,7 +127,6 @@ disable = """,
     trailing-whitespace,
     missing-final-newline,
     invalid-character-backspace,
-    invalid-character-carriage-return,
     invalid-character-esc,
     invalid-character-nul,
     invalid-character-sub,
@@ -128,7 +137,89 @@ disable = """,
     assert-on-tuple,
     comparison-of-constants,
     return-outside-function,
-    return-arg-in-generator,
+    broad-exception-caught,
+    function-redefined,
+    undefined-variable,
+    format-needs-mapping,
+    missing-format-string-key,
+    mixed-format-string,
+    nonexistent-operator,
+    not-in-loop,
+    notimplemented-raised,
+    too-few-format-args,
+    too-many-format-args,
+    too-many-star-expressions,
+    truncated-format-string,
+    undefined-all-variable,
+    yield-outside-function,
+    anomalous-backslash-in-string,
+    bad-format-string,
+    bare-except,
+    cell-var-from-loop,
+    dangerous-default-value,
+    duplicate-except,
+    duplicate-key,
+    duplicate-value,
+    eval-used,
+    exec-used,
+    expression-not-assigned,
+    f-string-without-interpolation,
+    format-combined-specification,
+    format-string-without-interpolation,
+    keyword-arg-before-vararg,
+    lost-exception,
+    method-cache-max-size-none,
+    misplaced-future,
+    missing-format-argument-key,
+    pointless-statement,
+    raise-missing-from,
+    redundant-u-string-prefix,
+    reimported,
+    unnecessary-pass,
+    unnecessary-semicolon,
+    unused-format-string-argument,
+    unused-format-string-key,
+    consider-iterating-dictionary,
+    empty-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    missing-module-docstring,
+    multiple-imports,
+    multiple-statements,
+    trailing-newlines,
+    ungrouped-imports,
+    unidiomatic-typecheck,
+    unnecessary-lambda-assignment,
+    wrong-import-order,
+    wrong-import-position,
+    consider-merging-isinstance,
+    consider-using-dict-comprehension,
+    consider-using-generator,
+    consider-using-get,
+    consider-using-set-comprehension,
+    consider-using-with,
+    inconsistent-return-statements,
+    literal-comparison,
+    no-else-break,
+    no-else-continue,
+    no-else-raise,
+    no-else-return,
+    simplifiable-if-expression,
+    simplifiable-if-statement,
+    super-with-arguments,
+    unnecessary-comprehension,
+    use-a-generator,
+    use-list-literal,
+    use-dict-literal,
+    use-yield-from,
+    useless-object-inheritance,
+    too-many-branches,
+    too-many-arguments,
+    too-many-statements,
+    consider-using-f-string,
+    missing-timeout,
+    unnecessary-ellipsis,
+    unnecessary-negation,
 """
 
 [tool.ruff]
@@ -149,9 +240,22 @@ select = [
     "ASYNC",  # blocking calls and misuse inside async code (MCP/agent runtime)
     "DTZ",  # naive datetimes under Django USE_TZ
     "PGH004",  # blanket `# noqa` that hides unrelated findings
-    "PIE794",  # duplicate class field definition (silently overwrites model/schema fields)
-    "PIE796",  # duplicate enum/choices values
+    "PIE",  # unnecessary statements, duplicate class fields/enum values
     "PLW2901",  # loop variable overwritten inside the loop body
+    "SIM",  # simplifiable conditionals and context managers
+    "RET",  # redundant else/return/assignment before return
+    "C4",  # unnecessary comprehensions and collection calls
+    "ERA",  # commented-out code
+    "FURB",  # verbose idioms with simpler modern equivalents
+    "PERF",  # avoidable loop/collection overhead
+    "BLE",  # blind `except Exception`; boundary catches need a justified noqa
+    # Stable Pylint rules owned by Ruff (matching Pylint messages are disabled there).
+    "PLR0912",  # too many branches (Ruff does not count `try` as a branch)
+    "PLR0913",  # too many arguments
+    "PLR0915",  # too many statements
+    "PLW0129",  # assert on string literal
+    "PLR0133",  # comparison of constants
+    "PLE2510", "PLE2512", "PLE2513", "PLE2514", "PLE2515",  # invalid control/zero-width characters
 ]
 ignore = [
     "D212", # Multi-line docstring summaries may start on the line after the opening quotes.
@@ -167,7 +271,9 @@ convention = "google"
 ]
 "nautobot_agent/tests/*" = [
     "D",
-    "S"
+    "S",
+    "PLR0913",  # test doubles mirror production signatures
+    "PLR0915",  # scenario tests keep one end-to-end flow per method
 ]
 
 [tool.ty.environment]

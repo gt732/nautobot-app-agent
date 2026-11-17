@@ -352,7 +352,7 @@ class AgentRunViewTests(CommittedTestCase):  # pylint: disable=too-many-public-m
         self.assertTrue(interrupted.json()["terminal"])
         self.assertEqual(AgentRun.objects.get(pk=running_id).prompt, "")
 
-    def test_delete_never_releases_active_runs(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_delete_never_releases_active_runs(self):  # pylint: disable=too-many-locals
         grant(self.owner, AgentConversation, actions=("view", "viewall"))
         grant(self.owner, AgentConversation, actions=("delete",), constraints={"user": "$user"})
 

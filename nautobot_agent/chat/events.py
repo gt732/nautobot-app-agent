@@ -8,6 +8,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from django.core.cache import caches
@@ -149,7 +150,7 @@ class RunEvents:
             return result.decode()
         except EventStreamError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # any client failure is reported as an unavailable event stream
             raise EventStreamError(type(exc).__name__) from None
 
     def publish(self, run_id: UUID | str, event: str, payload: dict) -> str:
@@ -169,65 +170,29 @@ class RunEvents:
             return result.decode()
         except EventStreamError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # any client failure is reported as an unavailable event stream
             raise EventStreamError(type(exc).__name__) from None
 
-    def read(  # pylint: disable=too-many-locals,too-many-return-statements,too-many-branches
-        self, run_id: UUID | str, after: str = "0-0"
-    ) -> EventPage:
+    def read(self, run_id: UUID | str, after: str = "0-0") -> EventPage:
         """Read a nonblocking, bounded page, reporting any uncertain coverage."""
         after_key = _id_key(after)
         resync = EventPage([], after, False, True)
         try:
             _, client = self._get_client()
-            key = self._key(run_id)
-            page = client.eval(_READ_SCRIPT, 1, key, after)
+            page = client.eval(_READ_SCRIPT, 1, self._key(run_id), after)
             kind = page[0]
             if kind == b"none":
                 return EventPage([], after, False, after != "0-0", queued=after == "0-0")
             if kind != b"stream":
                 return resync
             first, tail, following = page[1:]
-            if not first or not tail:
+            if not _covers(first, tail, after, after_key):
                 return resync
-            first_id, marker_fields = first[0]
-            marker_fields = dict(zip(marker_fields[::2], marker_fields[1::2], strict=True))
-            last_id = tail[0][0].decode()
-            if after == "0-0" and (marker_fields.get(b"event") != b"start" or marker_fields.get(b"data") != b"{}"):
-                return resync
-            if after != "0-0" and after_key > _id_key(last_id):
-                return resync
-            if after != "0-0" and after_key < _id_key(first_id.decode()):
-                return resync
-            result = []
-            total = 2  # JSON array brackets; include separators in the response-byte bound.
-            cursor = after
-            for entry_id, fields in following[:100]:
-                entry_fields = dict(zip(fields[::2], fields[1::2], strict=True))
-                event = entry_fields.get(b"event")
-                data = entry_fields.get(b"data")
-                if not event or data is None:
-                    return resync
-                try:
-                    payload = json.loads(data)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    return resync
-                if not isinstance(payload, dict):
-                    return resync
-                event_name = event.decode()
-                if event_name != _START:
-                    item = {"event": event_name, "data": payload}
-                    size = len(json.dumps(item, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-                    size += bool(result)
-                    if total + size > _MAX_PAGE_BYTES:
-                        return EventPage(result, cursor, True, False)
-                    result.append(item)
-                    total += size
-                cursor = entry_id.decode()
-            return EventPage(result, cursor, len(following) > 100, False)
+            events = _event_page(following, after)
+            return resync if events is None else events
         except (RedisConnectionError, RedisTimeoutError) as exc:
             raise EventReadUnavailable(type(exc).__name__) from None
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # malformed or failed reads make the browser resync from durable state
             logger.warning("Run event read failed (%s)", type(exc).__name__)
             return resync
 
@@ -258,6 +223,59 @@ def _id_key(value: str) -> tuple[int, int]:
     if any(len(part) > 20 or int(part) > 2**64 - 1 for part in (milliseconds, sequence)):
         raise InvalidCursor("invalid stream cursor")
     return int(milliseconds), int(sequence)
+
+
+def _fields(flat: list[bytes]) -> dict[bytes, bytes]:
+    """Pair a Redis stream entry's flat field/value list."""
+    return dict(zip(flat[::2], flat[1::2], strict=True))
+
+
+def _covers(first: list, tail: list, after: str, after_key: tuple[int, int]) -> bool:
+    """Whether the retained stream still holds every event after the cursor."""
+    if not first or not tail:
+        return False
+    first_id, marker_fields = first[0]
+    marker = _fields(marker_fields)
+    last_id = tail[0][0].decode()
+    if after == "0-0":
+        return marker.get(b"event") == b"start" and marker.get(b"data") == b"{}"
+    return _id_key(first_id.decode()) <= after_key <= _id_key(last_id)
+
+
+def _decode_entry(fields: list[bytes]) -> dict[str, Any] | None:
+    """Return one stored entry as a page item, or None when it is malformed."""
+    entry = _fields(fields)
+    event = entry.get(b"event")
+    data = entry.get(b"data")
+    if not event or data is None:
+        return None
+    try:
+        payload = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {"event": event.decode(), "data": payload}
+
+
+def _event_page(following: list, after: str) -> EventPage | None:
+    """Build a byte-bounded page from entries after the cursor, or None when any entry is malformed."""
+    result = []
+    total = 2  # JSON array brackets; include separators in the response-byte bound.
+    cursor = after
+    for entry_id, fields in following[:100]:
+        item = _decode_entry(fields)
+        if item is None:
+            return None
+        if item["event"] != _START:
+            size = len(json.dumps(item, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+            size += bool(result)
+            if total + size > _MAX_PAGE_BYTES:
+                return EventPage(result, cursor, True, False)
+            result.append(item)
+            total += size
+        cursor = entry_id.decode()
+    return EventPage(result, cursor, len(following) > 100, False)
 
 
 def read_run_events(run_id: UUID | str, after: str = "0-0") -> EventPage:

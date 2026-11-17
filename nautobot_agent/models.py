@@ -48,6 +48,24 @@ def parse_model_spec(value) -> tuple[str, str] | None:
     return (provider, model_name) if separator and provider and model_name else None
 
 
+def _reserved_keys(mapping: dict[str, Any]) -> str:
+    """Return the reserved initializer keys present in ``mapping``, comma-separated."""
+    return ", ".join(key for key in RESERVED_PARAMETER_KEYS if key in mapping)
+
+
+def _utf8_length(value: str) -> int | None:
+    """Return the UTF-8 byte length, or None when the text cannot be encoded (lone surrogates)."""
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+
+
+def _stripped_text(value: Any) -> str | None:
+    """Return ``value`` stripped when it is nonblank text, else None."""
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
 def cascade_without_payload(collector, field, sub_objs, using):
     """Collect cascading children using only identity and their parent foreign key."""
     return models.CASCADE(collector, field, sub_objs.only("pk", field.attname), using)
@@ -210,26 +228,20 @@ class LLMConfiguration(ConflictTranslatingSaveMixin, BaseModel):
         if parsed is None:
             errors["model"] = "Enter the model as provider:model."
 
-        if not isinstance(self.parameters, dict):
+        parameters = self.parameters if isinstance(self.parameters, dict) else None
+        if parameters is None:
             errors["parameters"] = "Parameters must be a JSON object."
-            parameters = None
-        else:
-            parameters = self.parameters
-            reserved_parameters = [key for key in RESERVED_PARAMETER_KEYS if key in parameters]
-            if reserved_parameters:
-                errors["parameters"] = f"Parameters must not set: {', '.join(reserved_parameters)}."
+        elif reserved := _reserved_keys(parameters):
+            errors["parameters"] = f"Parameters must not set: {reserved}."
 
         profile_name = self.credential_profile
         profile = None
         if profile_name != "":
-            profiles = app_settings.credential_profiles()
-            if not isinstance(profile_name, str) or profile_name not in profiles:
+            profile = app_settings.credential_profiles().get(profile_name) if isinstance(profile_name, str) else None
+            if profile is None:
                 errors["credential_profile"] = "Select a credential profile defined in the deployment."
-            else:
-                profile = profiles[profile_name]
-                reserved_profile = [key for key in RESERVED_PARAMETER_KEYS if key in profile]
-                if reserved_profile:
-                    errors["credential_profile"] = f"Credential profile must not set: {', '.join(reserved_profile)}."
+            elif reserved := _reserved_keys(profile):
+                errors["credential_profile"] = f"Credential profile must not set: {reserved}."
 
         if errors or parsed is None or parameters is None:
             raise ValidationError(errors)
@@ -398,34 +410,55 @@ class MCPServer(ConflictTranslatingSaveMixin, BaseModel):
         if not isinstance(definition, dict) or set(definition) - {"command", "args", "cwd", "env"}:
             errors["launch"] = "Enter a bare launch object containing only command, args, cwd, and env."
             return errors
-        command = definition.get("command")
-        args = definition.get("args", [])
-        cwd = definition.get("cwd", "")
-        env = definition.get("env", {})
-        messages = []
-        if not isinstance(command, str) or not command.strip():
-            messages.append("Enter a nonblank executable command.")
-        elif "\0" in command or len(command) > 2048:
-            messages.append("The command must be at most 2,048 characters and cannot contain NUL.")
-        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
-            messages.append("Enter a list of string arguments.")
-        elif any("\0" in arg for arg in args):
-            messages.append("Arguments cannot contain NUL.")
-        if not isinstance(cwd, str):
-            messages.append("Enter a working directory path.")
-        elif "\0" in cwd or len(cwd) > 2048:
-            messages.append("The working directory must be at most 2,048 characters and cannot contain NUL.")
-        elif cwd and not os.path.isabs(cwd):
-            messages.append("Enter an absolute working directory path or leave it blank.")
-        if not isinstance(env, dict) or any(
-            not isinstance(key, str) or not isinstance(value, str) for key, value in env.items()
-        ):
-            messages.append("Enter an object containing string environment names and values.")
-        elif any(not app_settings.valid_mcp_environment_entry(key, value) for key, value in env.items()):
-            messages.append("Environment names cannot be empty or contain NUL or '='; values cannot contain NUL.")
+        messages = [
+            message
+            for message in (
+                _launch_command_error(definition.get("command")),
+                _launch_args_error(definition.get("args", [])),
+                _launch_cwd_error(definition.get("cwd", "")),
+                _launch_env_error(definition.get("env", {})),
+            )
+            if message
+        ]
         if messages:
             errors["launch"] = messages
         return errors
+
+
+def _launch_command_error(command) -> str | None:
+    if not isinstance(command, str) or not command.strip():
+        return "Enter a nonblank executable command."
+    if "\0" in command or len(command) > 2048:
+        return "The command must be at most 2,048 characters and cannot contain NUL."
+    return None
+
+
+def _launch_args_error(args) -> str | None:
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        return "Enter a list of string arguments."
+    if any("\0" in arg for arg in args):
+        return "Arguments cannot contain NUL."
+    return None
+
+
+def _launch_cwd_error(cwd) -> str | None:
+    if not isinstance(cwd, str):
+        return "Enter a working directory path."
+    if "\0" in cwd or len(cwd) > 2048:
+        return "The working directory must be at most 2,048 characters and cannot contain NUL."
+    if cwd and not os.path.isabs(cwd):
+        return "Enter an absolute working directory path or leave it blank."
+    return None
+
+
+def _launch_env_error(env) -> str | None:
+    if not isinstance(env, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in env.items()
+    ):
+        return "Enter an object containing string environment names and values."
+    if any(not app_settings.valid_mcp_environment_entry(key, value) for key, value in env.items()):
+        return "Environment names cannot be empty or contain NUL or '='; values cannot contain NUL."
+    return None
 
 
 _SKILL_IDENTIFIER_CONSTRAINT = "nbagent_skill_identifier_unique"
@@ -487,35 +520,23 @@ class Skill(ConflictTranslatingSaveMixin, BaseModel):
         value = re.sub(r"-+", "-", value).strip("-")[:64].rstrip("-")
         return value or cast(UUID, self.pk).hex
 
-    def validate_content(self) -> None:  # pylint: disable=too-many-branches
+    def validate_content(self) -> None:
         """Validate normalized author content and the generated identifier contract."""
         errors = {}
-        if not isinstance(self.name, str) or not self.name.strip():
-            errors["name"] = "Enter a nonblank name."
-        else:
-            self.name = self.name.strip()  # ty: ignore[invalid-assignment] Django fields expose strings on instances.
-            try:
-                self.name.encode("utf-8")
-            except UnicodeEncodeError:
-                errors["name"] = "Name must contain valid UTF-8 text."
-        if not isinstance(self.description, str) or not self.description.strip():
-            errors["description"] = "Enter a nonblank description."
-        else:
-            self.description = self.description.strip()  # ty: ignore[invalid-assignment] Django instance string.
-            try:
-                self.description.encode("utf-8")
-            except UnicodeEncodeError:
-                errors["description"] = "Description must contain valid UTF-8 text."
-        if not isinstance(self.instructions, str) or not self.instructions.strip():
+        for field, label in (("name", "Name"), ("description", "Description")):
+            text = _stripped_text(getattr(self, field))
+            if text is None:
+                errors[field] = f"Enter a nonblank {field}."
+                continue
+            setattr(self, field, text)
+            if _utf8_length(text) is None:
+                errors[field] = f"{label} must contain valid UTF-8 text."
+        if _stripped_text(self.instructions) is None:
             errors["instructions"] = "Enter nonblank instructions."
-        else:
-            try:
-                size = len(self.instructions.encode("utf-8"))
-            except UnicodeEncodeError:
-                errors["instructions"] = "Instructions must contain valid UTF-8 text."
-            else:
-                if size > 65536:
-                    errors["instructions"] = "Instructions must be at most 65,536 UTF-8 bytes."
+        elif (size := _utf8_length(cast(str, self.instructions))) is None:
+            errors["instructions"] = "Instructions must contain valid UTF-8 text."
+        elif size > 65536:
+            errors["instructions"] = "Instructions must be at most 65,536 UTF-8 bytes."
         if (
             not isinstance(self.identifier, str)
             or not 1 <= len(self.identifier) <= 64
@@ -555,10 +576,7 @@ class AgentConversationQuerySet(RestrictedQuerySet):
 
     def readable_by(self, user):
         """Return conversations in the user's ownership scope and native View restrictions."""
-        if AgentConversation.view_all_allowed(user):
-            queryset = self
-        else:
-            queryset = self.owner_history(user)
+        queryset = self if AgentConversation.view_all_allowed(user) else self.owner_history(user)
         return queryset.restrict(user, "view")
 
     def with_trace_counts(self, user):

@@ -67,7 +67,7 @@ class _GraphFixture:
         self.location_token = self.tree.base.name
         self.model: ScriptedToolModel | None = None
 
-    def start_graph(  # pylint: disable=too-many-arguments
+    def start_graph(
         self,
         script,
         *,
@@ -122,7 +122,7 @@ class _GraphFixture:
         """Assert the filesystem subset is exactly four source tools, with no mutation or shell tools."""
         for tools in self.scripted_model.tool_sets:
             if tools is not None:
-                self.assertEqual(set(tools) & set([*SOURCE_TOOLS, *FORBIDDEN_TOOLS]), set(SOURCE_TOOLS))
+                self.assertEqual(set(tools) & {*SOURCE_TOOLS, *FORBIDDEN_TOOLS}, set(SOURCE_TOOLS))
 
     def saved_messages(self, graph, client: Client | None = None) -> list[BaseMessage]:
         """Return a client's (default: this test's) checkpointed root messages."""

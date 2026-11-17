@@ -565,7 +565,7 @@ class ConversationHistoryManagementTests(_ConversationHistoryCase):
         self.assertEqual(safe.status_code, 302)
         self.assertEqual(safe["Location"], all_url)
 
-    def test_bulk_select_all_and_constraints_are_scoped(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_bulk_select_all_and_constraints_are_scoped(self):  # pylint: disable=too-many-locals
         reviewer = User.objects.create_user(username="bulk-resolver-reviewer")
         grant(reviewer, AgentConversation, actions=("view",), constraints={"user": "$user"})
         grant(reviewer, AgentConversation, actions=("viewall",))

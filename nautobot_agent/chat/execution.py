@@ -154,7 +154,7 @@ class RunWriteGuard:  # pylint: disable=too-many-instance-attributes,too-many-pu
             handler = self._drain_handler
         try:
             handler()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # a failed drain callback is retried later and must not break the guard
             with self._drain_lock:
                 self._notification_pending = True
             logger.warning("Run drain resource notification failed (%s)", type(exc).__name__)
@@ -203,15 +203,14 @@ class RunWriteGuard:  # pylint: disable=too-many-instance-attributes,too-many-pu
 
     def record_interruption(self, reason: str, *, drain_reason: str = "") -> None:
         """Latch the first interruption cause and an explicitly paired drain."""
-        with self._operation():
-            with self._outcome_lock:
-                if self._finalization is not None:
-                    return
-                if not self._interruption_reason:
-                    self._interruption_reason = reason or "cleanup_unconfirmed"
-                if drain_reason:
-                    with self._drain_lock:
-                        self._latch_drain(drain_reason)
+        with self._operation(), self._outcome_lock:
+            if self._finalization is not None:
+                return
+            if not self._interruption_reason:
+                self._interruption_reason = reason or "cleanup_unconfirmed"
+            if drain_reason:
+                with self._drain_lock:
+                    self._latch_drain(drain_reason)
 
     def observe(self, termination: TerminationKind, termination_error: str, drain_reason: str) -> RunObservations:
         """Snapshot guard-owned safety facts alongside the execution's termination evidence."""
@@ -292,7 +291,7 @@ class RunWriteGuard:  # pylint: disable=too-many-instance-attributes,too-many-pu
             error = ConversationUnavailable("Execution authority is unavailable.")
             try:
                 self.interrupt("principal_inactive")
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # the authority error must still be raised
                 logger.warning("Unable to interrupt inactive-principal run (%s)", type(exc).__name__)
             raise error
         if cancel:
@@ -326,7 +325,7 @@ class RunWriteGuard:  # pylint: disable=too-many-instance-attributes,too-many-pu
                 external_outcome_unknown=external_outcome_unknown,
                 cleanup_incomplete=cleanup_incomplete,
             )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # diagnostics are best effort and never affect the run
             logger.warning("Run diagnostic persistence failed (%s)", type(exc).__name__)
 
     def persist_diagnostics(self) -> None:
@@ -343,7 +342,7 @@ class RunWriteGuard:  # pylint: disable=too-many-instance-attributes,too-many-pu
             return
         try:
             self.interrupt("ownership_unavailable")
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:  # noqa: BLE001  # best-effort interruption after authority is already lost
             close_old_connections()
 
     def heartbeat(self) -> bool:
@@ -478,7 +477,7 @@ class AgentExecution:  # pylint: disable=too-many-instance-attributes
             self._mcp_cleanup_unconfirmed()
             logger.warning("Chat MCP shutdown failed (SoftTimeLimitExceeded)")
             return
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # a failed close is recorded as unconfirmed cleanup, never raised
             self._mcp_cleanup_unconfirmed()
             logger.warning("Chat MCP shutdown failed (%s)", type(exc).__name__)
             return
@@ -513,7 +512,7 @@ class AgentExecution:  # pylint: disable=too-many-instance-attributes
         except (ConversationUnavailable, ImproperlyConfigured) as exc:
             self._report_failure("execution_unavailable", diagnostic=safe_error_diagnostic(exc))
             return TerminationKind.FAILED, "execution_unavailable"
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # every turn failure becomes a classified terminal outcome
             failure = model_failure(exc)
             code = failure.code if failure is not None else type(exc).__name__
             self._report_failure(code, diagnostic=safe_error_diagnostic(exc))
@@ -570,7 +569,7 @@ class AgentExecution:  # pylint: disable=too-many-instance-attributes
             committed = outcome.status if confirmed else self._committed_status()
             if confirmed and outcome.status != AgentRunStatus.INTERRUPTED and self.done_pending:
                 self._publish(DONE, {}, terminal=True)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # monitor shutdown and trace capture must still run
             self.guard.invalidate()
             logger.warning("Chat run finalization failed (%s)", type(exc).__name__)
         # Execution is over: trace-only delay must never reach the cleanup-deadline monitor.
@@ -596,7 +595,7 @@ class AgentExecution:  # pylint: disable=too-many-instance-attributes
         """Read an outcome another actor committed; None when no terminal outcome is visible."""
         try:
             status = AgentRun.objects.filter(pk=self.claim.run_id).values_list("status", flat=True).first()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except DatabaseError as exc:
             logger.warning("Chat run outcome read failed (%s)", type(exc).__name__)
             return None
         return None if status in (None, AgentRunStatus.QUEUED, AgentRunStatus.RUNNING) else status
@@ -662,37 +661,41 @@ class AgentExecution:  # pylint: disable=too-many-instance-attributes
             on_cleanup=self._begin_cleanup,
         )
         try:
-            try:
-                for name, payload in stream:
-                    if self.control.drain_requested:
-                        break
-                    if name == DONE:
-                        termination = TerminationKind.COMPLETED
-                    if name == ERROR and payload.get("error_code"):
-                        failure_code = payload["error_code"]
-                        continue
-                    self._publish(name, payload)
-            except (RunDraining, SoftTimeLimitExceeded):
-                raise
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                if self.cleanup_deadline is not None:
-                    self.guard.record_interruption("graph_cleanup_unconfirmed", drain_reason="graph_cleanup")
-                    logger.warning("Chat graph shutdown failed (%s)", type(exc).__name__)
-                raise
-        finally:
-            self._begin_cleanup()
-            try:
-                stream.close()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            for name, payload in stream:
+                if self.control.drain_requested:
+                    break
+                if name == DONE:
+                    termination = TerminationKind.COMPLETED
+                if name == ERROR and payload.get("error_code"):
+                    failure_code = payload["error_code"]
+                    continue
+                self._publish(name, payload)
+        except (RunDraining, SoftTimeLimitExceeded):
+            raise
+        except Exception as exc:
+            if self.cleanup_deadline is not None:
                 self.guard.record_interruption("graph_cleanup_unconfirmed", drain_reason="graph_cleanup")
-                logger.warning("Chat graph cleanup failed (%s)", type(exc).__name__)
-            else:
-                if isinstance(turn.runtime.saver, DjangoCheckpointSaver):
-                    try:
-                        turn.runtime.saver.prune_turn(config, channels=agent_graph.graph.channels)
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        logger.warning("Chat checkpoint pruning failed (%s)", type(exc).__name__)
+                logger.warning("Chat graph shutdown failed (%s)", type(exc).__name__)
+            raise
+        finally:
+            self._close_graph(stream, turn.runtime.saver, config, agent_graph.graph.channels)
         return termination, failure_code
+
+    def _close_graph(self, stream, saver, config, channels) -> None:
+        """Close the event stream, then prune this turn's checkpoints only after a confirmed close."""
+        self._begin_cleanup()
+        try:
+            stream.close()
+        except Exception as exc:  # noqa: BLE001  # an unconfirmed close interrupts the run instead of raising
+            self.guard.record_interruption("graph_cleanup_unconfirmed", drain_reason="graph_cleanup")
+            logger.warning("Chat graph cleanup failed (%s)", type(exc).__name__)
+            return
+        if not isinstance(saver, DjangoCheckpointSaver):
+            return
+        try:
+            saver.prune_turn(config, channels=channels)
+        except Exception as exc:  # noqa: BLE001  # pruning is best effort; the turn outcome is already known
+            logger.warning("Chat checkpoint pruning failed (%s)", type(exc).__name__)
 
     def _handle_drain(self) -> None:
         """Start bounded cleanup and signal MCP without taking the cleanup lock."""

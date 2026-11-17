@@ -175,9 +175,9 @@ class SkillDomainTests(TestCase):
         with (
             patch.object(Skill, "full_clean", clean_with_competitor),
             patch.object(BaseModel, "save", autospec=True, side_effect=counted_save),
+            self.assertRaises(NamedConstraintConflict) as conflict,
         ):
-            with self.assertRaises(NamedConstraintConflict) as conflict:
-                loser.save()
+            loser.save()
 
         self.assertEqual(insert_count, 1)
         self.assertIn("device-audit", conflict.exception.message_dict["name"][0])

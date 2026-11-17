@@ -39,7 +39,7 @@ class QueryContinuation:
     _expires_at: int | None
 
     @classmethod
-    def bind(  # pylint: disable=too-many-arguments
+    def bind(
         cls,
         token: str | None,
         *,

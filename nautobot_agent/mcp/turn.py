@@ -99,7 +99,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
         except asyncio.CancelledError:
             raise MCPUnavailableError(_TURN_UNAVAILABLE) from None
 
-    async def _discover(self, launches: dict[str, Launch]) -> MCPDiscoveryResult:  # pylint: disable=too-many-branches
+    async def _discover(self, launches: dict[str, Launch]) -> MCPDiscoveryResult:
         """Discover each catalog through its own native, single-member FastMCP group."""
         with self._state_lock:
             if self._closing:
@@ -107,8 +107,6 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
             self._discovery = asyncio.current_task()
         sessions: dict[str, ClientSession] = {}
         tasks: dict[str, asyncio.Task[Any]] = {}
-        outcomes: dict[str, tuple[tuple[str, Tool, BaseTool], ...] | None] = {}
-        pending: set[asyncio.Task[Any]] = set()
         try:
             tasks = {
                 alias: asyncio.create_task(self._discover_one(alias, launch, sessions))
@@ -117,41 +115,27 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
             done, pending = await asyncio.wait(
                 tasks.values(), timeout=DISCOVERY_TIMEOUT_SECONDS, return_when=asyncio.FIRST_EXCEPTION
             )
-            fatal: BaseException | None = None
-            for task in done:
-                try:
-                    alias, entries = task.result()
-                    outcomes[alias] = entries
-                except BaseException as exc:  # pylint: disable=broad-exception-caught
-                    if fatal is None or isinstance(exc, asyncio.CancelledError):
-                        fatal = exc
-            if fatal is not None or pending:
-                for task in pending:
-                    task.cancel()
-                settled = await asyncio.gather(*pending, return_exceptions=True)
-                if fatal is None:
-                    for result in settled:
-                        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
-                            fatal = result
-                            break
-                if fatal is not None:
-                    raise fatal
-            for alias in tasks:
-                if alias in outcomes:
-                    continue
-                outcomes[alias] = None
+            for task in pending:
+                task.cancel()
+            finished = await asyncio.gather(*done, return_exceptions=True)
+            abandoned = await asyncio.gather(*pending, return_exceptions=True)
+            fatal = _fatal_discovery_failure(finished, abandoned)
+            if fatal is not None:
+                raise fatal
+            # Abandoned servers that ignored cancellation and still returned stay unavailable.
+            # Any finished exception was raised above; the filter only narrows the result type.
+            outcomes = dict(result for result in finished if not isinstance(result, BaseException))
             return MCPDiscoveryResult(
-                entries=tuple(entry for alias in launches for entry in (outcomes[alias] or ())),
-                unavailable_aliases=tuple(alias for alias in launches if outcomes[alias] is None),
+                entries=tuple(entry for alias in launches for entry in (outcomes.get(alias) or ())),
+                unavailable_aliases=tuple(alias for alias in launches if outcomes.get(alias) is None),
             )
         finally:
             with self._state_lock:
                 self._discovery = None
             unsettled = {task for task in tasks.values() if not task.done()}
-            if unsettled:
-                for task in unsettled:
-                    task.cancel()
-                await asyncio.gather(*unsettled, return_exceptions=True)
+            for task in unsettled:
+                task.cancel()
+            await asyncio.gather(*unsettled, return_exceptions=True)
             await self._close_discovery(list(sessions.values()))
 
     async def _discover_one(
@@ -171,7 +155,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
                 converted = await as_langchain_tool(public_tool, group)
                 entries.append((route.server_name, definition, converted))
             return alias, tuple(entries)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # one server's failure only makes that server unavailable
             logger.error("MCP server discovery failed (alias=%s, error=%s)", alias, type(exc).__name__)
             return alias, None
 
@@ -236,7 +220,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
     def _mark_discovery_cleanup_incomplete(self) -> None:
         try:
             self._host.mark_mcp_cleanup_incomplete()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # host callback failure must not stop discovery cleanup
             logger.error("MCP discovery cleanup callback failed (%s)", type(exc).__name__)
         self._handoff_diagnostics()
 
@@ -247,7 +231,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
         """
         try:
             task = asyncio.ensure_future(sync_to_async(self._host.persist_diagnostics, thread_sensitive=False)())
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # best-effort diagnostics must not fail the reporting operation
             logger.warning("MCP diagnostic handoff failed (%s)", type(exc).__name__)
             return
         with self._state_lock:
@@ -303,7 +287,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
         if notify:
             try:
                 self._host.mark_mcp_uncertain()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # host callback failure must not mask the operation outcome
                 logger.error("MCP uncertainty callback failed (%s)", type(exc).__name__)
             self._handoff_diagnostics()
 
@@ -360,7 +344,7 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
             if cleanup is not None:
                 try:
                     cleanup_confirmed = bool(cleanup.result(timeout=max(0, deadline - time.monotonic())))
-                except Exception as exc:  # pylint: disable=broad-exception-caught
+                except Exception as exc:  # noqa: BLE001  # close reports unconfirmed cleanup instead of raising
                     cleanup_confirmed = False
                     logger.error("MCP turn cleanup failed (%s)", type(exc).__name__)
             thread.join(timeout=max(0, deadline - time.monotonic()))
@@ -368,3 +352,18 @@ class MCPTurn:  # pylint: disable=too-many-instance-attributes
         with self._state_lock:
             unknown = self._unknown_external
         return MCPCleanupResult(cleanup_confirmed=cleanup_confirmed, external_outcome_unknown=unknown)
+
+
+def _fatal_discovery_failure(finished: list[Any], abandoned: list[Any]) -> BaseException | None:
+    """Choose the failure that aborts discovery; per-server errors were already isolated as results.
+
+    Cancellation of a finished server wins; abandoned servers count only when not cancelled by the timeout.
+    """
+    failures = [result for result in finished if isinstance(result, BaseException)]
+    cancelled = [failure for failure in failures if isinstance(failure, asyncio.CancelledError)]
+    late = [
+        result
+        for result in abandoned
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
+    ]
+    return next(iter(cancelled or failures or late), None)

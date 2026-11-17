@@ -274,9 +274,9 @@ class RunWriteGuardTests(TestCase):
         with (
             patch("nautobot_agent.chat.execution.time.monotonic", return_value=baseline + 20),
             patch.object(LockedRun, "heartbeat", autospec=True, side_effect=DatabaseError("exhausted")),
+            self.assertRaises(ConversationUnavailable),
         ):
-            with self.assertRaises(ConversationUnavailable):
-                self.guard._heartbeat()
+            self.guard._heartbeat()
         self.assertTrue(self.guard.invalid)
 
     def test_inactive_owner_and_cancellation_deny_new_work(self):
@@ -345,7 +345,7 @@ class RunExecutionTests(RunExecutionTestCase):
                 self.assertIn("failing_parts", logs.output[0])
                 self.assertNotIn(secret, logs.output[0])
 
-    def test_invalidation_inside_write_does_not_deadlock_with_finalization(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_invalidation_inside_write_does_not_deadlock_with_finalization(self):  # pylint: disable=too-many-locals
         run, execution = self.start_execution()
         claim = execution.claim
         write_entered, invalidate_write, finish_entered, invalidated = (
@@ -374,7 +374,7 @@ class RunExecutionTests(RunExecutionTestCase):
                     invalidated.set()
             except ConversationUnavailable:
                 outcomes.append("rolled_back")
-            except Exception as error:  # pylint: disable=broad-exception-caught
+            except Exception as error:  # noqa: BLE001  # worker threads forward any failure to the test assertion
                 errors.append(error)
             finally:
                 connections.close_all()
@@ -382,7 +382,7 @@ class RunExecutionTests(RunExecutionTestCase):
         def finalize():
             try:
                 outcomes.append(execution._commit_outcome(TerminationKind.COMPLETED, "", ""))
-            except Exception as error:  # pylint: disable=broad-exception-caught
+            except Exception as error:  # noqa: BLE001  # worker threads forward any failure to the test assertion
                 errors.append(error)
             finally:
                 connections.close_all()
@@ -416,18 +416,18 @@ class RunExecutionTests(RunExecutionTestCase):
     def test_guard_rejects_conversation_mismatch_and_distinguishes_storage_failure(self):
         run, execution = self.start_execution()
         claim = execution.claim
-        with self.assertRaises(ConversationUnavailable):
-            with execution.guard.write(str(uuid.uuid4())) as write:
-                write.store_display("forbidden", 1, [])
+        with self.assertRaises(ConversationUnavailable), execution.guard.write(str(uuid.uuid4())) as write:
+            write.store_display("forbidden", 1, [])
         self.assertFalse(execution.guard.invalid)
-        with patch("nautobot_agent.chat.execution.locked_run_write", side_effect=DatabaseError("unavailable")):
-            with self.assertRaises(ConversationUnavailable):
-                with execution.guard.write(str(claim.conversation_id)):
-                    self.fail("Unavailable storage admitted a write.")
+        with (
+            patch("nautobot_agent.chat.execution.locked_run_write", side_effect=DatabaseError("unavailable")),
+            self.assertRaises(ConversationUnavailable),
+            execution.guard.write(str(claim.conversation_id)),
+        ):
+            self.fail("Unavailable storage admitted a write.")
         self.assertTrue(execution.guard.invalid)
-        with self.assertRaises(ConversationUnavailable):
-            with execution.guard.write(str(claim.conversation_id)) as write:
-                write.store_display("forbidden", 1, [])
+        with self.assertRaises(ConversationUnavailable), execution.guard.write(str(claim.conversation_id)) as write:
+            write.store_display("forbidden", 1, [])
         run.refresh_from_db()
         self.assertEqual(run.display_model, "")
 

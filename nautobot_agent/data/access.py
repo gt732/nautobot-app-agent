@@ -164,7 +164,7 @@ def _grant(model: type[Model], user: Any, action: str) -> bool | Q:
     ):
         return False
     condition = qs_filter_from_constraints(constraints, {"$user": user})
-    return True if not condition else condition
+    return condition or True
 
 
 def _restrict_with_grant(queryset: QuerySet, grant: bool | Q) -> QuerySet:

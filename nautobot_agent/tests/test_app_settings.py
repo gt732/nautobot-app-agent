@@ -161,9 +161,11 @@ class AppSettingsTests(SimpleTestCase):
             ),
         )
         for reader, plugins_config, expected in accepted:
-            with self.subTest(reader=reader.__name__, plugins_config=plugins_config):
-                with self.settings(PLUGINS_CONFIG=plugins_config):
-                    self.assertEqual(reader(), expected)
+            with (
+                self.subTest(reader=reader.__name__, plugins_config=plugins_config),
+                self.settings(PLUGINS_CONFIG=plugins_config),
+            ):
+                self.assertEqual(reader(), expected)
 
         malformed_parents = (
             None,
@@ -253,9 +255,11 @@ class AppSettingsTests(SimpleTestCase):
                     app_settings.chat_run_settings()
                 self.assertNotIn("30", str(caught.exception))
 
-        with self.settings(PLUGINS_CONFIG={"nautobot_agent": {**settings_base, "chat_hard_time_limit": 45}}):
-            with self.assertRaises(ImproperlyConfigured):
-                app_settings.validate_all()
+        with (
+            self.settings(PLUGINS_CONFIG={"nautobot_agent": {**settings_base, "chat_hard_time_limit": 45}}),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            app_settings.validate_all()
 
         for queue, expected_queue in ((None, None), ("  worker-queue  ", "worker-queue")):
             with (
@@ -285,9 +289,9 @@ class AppSettingsTests(SimpleTestCase):
             with (
                 self.subTest(queue=queue),
                 self.settings(PLUGINS_CONFIG={"nautobot_agent": {"chat_celery_queue": queue}}),
+                self.assertRaises(ImproperlyConfigured),
             ):
-                with self.assertRaises(ImproperlyConfigured):
-                    app_settings.chat_run_settings()
+                app_settings.chat_run_settings()
 
     def test_source_mapping(self):
         for app_config, expected in (
@@ -298,9 +302,8 @@ class AppSettingsTests(SimpleTestCase):
                 {"Readers": ("enabled_app", "nested.package")},
             ),
         ):
-            with self.subTest(app_config=app_config):
-                with self.settings(PLUGINS_CONFIG={"nautobot_agent": app_config}):
-                    self.assertEqual(app_settings.source_apps_by_group(), expected)
+            with self.subTest(app_config=app_config), self.settings(PLUGINS_CONFIG={"nautobot_agent": app_config}):
+                self.assertEqual(app_settings.source_apps_by_group(), expected)
 
         malformed = (
             None,

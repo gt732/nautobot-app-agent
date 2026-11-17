@@ -83,10 +83,9 @@ class RunPublicationTests(SimpleTestCase):
     def _register_queue_cleanup(self, queue_name):
         def cleanup():
             try:
-                with Connection("memory://") as cleanup_connection:
-                    with cleanup_connection.channel() as channel:
-                        channel.exchange_delete(exchange=queue_name)
-                        channel.queue_delete(queue=queue_name)
+                with Connection("memory://") as cleanup_connection, cleanup_connection.channel() as channel:
+                    channel.exchange_delete(exchange=queue_name)
+                    channel.queue_delete(queue=queue_name)
             finally:
                 tasks.app.amqp.queues.pop(queue_name, None)
 
@@ -101,18 +100,17 @@ class RunPublicationTests(SimpleTestCase):
         with patch("nautobot_agent.tasks.app.connection_for_write", return_value=memory_connection):
             tasks.publish_run(run_id, uuid.uuid4(), queue_name, soft=30, cleanup=5, hard=46)
 
-        with Connection("memory://") as consumer_connection:
-            with consumer_connection.SimpleQueue(queue_name) as consumer:
-                message = None
-                try:
-                    message = consumer.get(block=False)
-                    self.assertEqual(message.headers["task"], "nautobot_agent.execute_chat_run")
-                    self.assertEqual(message.payload[0], [str(run_id)])
-                    self.assertEqual(message.delivery_info["routing_key"], queue_name)
-                    self.assertEqual(message.headers["timelimit"], [46, 45])
-                finally:
-                    if message is not None:
-                        message.ack()
+        with Connection("memory://") as consumer_connection, consumer_connection.SimpleQueue(queue_name) as consumer:
+            message = None
+            try:
+                message = consumer.get(block=False)
+                self.assertEqual(message.headers["task"], "nautobot_agent.execute_chat_run")
+                self.assertEqual(message.payload[0], [str(run_id)])
+                self.assertEqual(message.delivery_info["routing_key"], queue_name)
+                self.assertEqual(message.headers["timelimit"], [46, 45])
+            finally:
+                if message is not None:
+                    message.ack()
 
 
 class ReservationTransitionTests(TestCase):
@@ -150,9 +148,8 @@ class ReservationTransitionTests(TestCase):
                     AgentConversation.objects.filter(pk=self.conversation.pk).update(user=other)
                 else:
                     run_id = uuid.uuid4()
-                with self.assertRaises(RunReservationConflict):
-                    with locked_run_write(run_id) as write:
-                        write.store_display("forbidden", 1, [])
+                with self.assertRaises(RunReservationConflict), locked_run_write(run_id) as write:
+                    write.store_display("forbidden", 1, [])
                 self.reserved_run.refresh_from_db()
                 self.assertEqual(self.reserved_run.display_model, "")
                 transaction.set_rollback(True)
@@ -379,7 +376,7 @@ class DurableRunTests(CommittedTestCase):  # pylint: disable=too-many-public-met
             connection.rollback()
             transaction.set_autocommit(True)
 
-    def test_concurrent_admission_serializes(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_concurrent_admission_serializes(self):  # pylint: disable=too-many-locals
         conversation = AgentConversation.objects.create(user=self.user)
         barrier = threading.Barrier(3)
         request_ids = (uuid.uuid4(), uuid.uuid4())
@@ -469,9 +466,8 @@ class DurableRunTests(CommittedTestCase):  # pylint: disable=too-many-public-met
         finish_run(run.pk, AgentRunStatus.INTERRUPTED, error_code="stale_heartbeat")
         successor = self.admit(conversation_id=run.conversation_id, request_id=uuid.uuid4())
         claimed_run(successor.pk)
-        with self.assertRaises(RunReservationConflict):
-            with locked_run_write(run.pk):
-                pass
+        with self.assertRaises(RunReservationConflict), locked_run_write(run.pk):
+            pass
         for status in (AgentRunStatus.COMPLETED, AgentRunStatus.INTERRUPTED):
             with self.subTest(status=status), self.assertRaises(RunReservationConflict):
                 finish_run(run.pk, status)
@@ -864,9 +860,11 @@ class RunDiagnosticsTests(TestCase):
     def test_storage_failure_logs_without_touching_lifecycle(self):
         guard, run = self.finished_run(AgentRunStatus.CANCELLED)
         guard.mark_mcp_uncertain()
-        with patch.object(QuerySet, "update", side_effect=DatabaseError("secret detail")):
-            with self.assertLogs("nautobot_agent.chat.execution", level="WARNING") as captured:
-                guard.merge_diagnostics()
+        with (
+            patch.object(QuerySet, "update", side_effect=DatabaseError("secret detail")),
+            self.assertLogs("nautobot_agent.chat.execution", level="WARNING") as captured,
+        ):
+            guard.merge_diagnostics()
         self.assertIn("Run diagnostic persistence failed (DatabaseError)", captured.output[0])
         self.assertNotIn("secret", captured.output[0])
         current = AgentRun.objects.get(pk=run.pk)
@@ -911,43 +909,34 @@ class BulkDeletionTransactionTests(CommittedTestCase):
                 with self.subTest(entrypoint=entrypoint, winner=winner):
                     self._assert_admission_deletion_race(entrypoint, winner)
 
-    def _assert_admission_deletion_race(self, entrypoint, winner):  # pylint: disable=too-many-locals
+    def _assert_admission_deletion_race(self, entrypoint, winner):
         conversation = AgentConversation.objects.create(user=self.owner)
         first_locked = threading.Event()
         second_attempted = threading.Event()
         release_first = threading.Event()
-        original_bulk_locks = runs.lock_conversation_reservations
-        original_owner_lock = runs._lock_owner  # pylint: disable=protected-access
 
-        def hold_first():
-            first_locked.set()
-            if not release_first.wait(10):
-                raise TimeoutError("second contender did not reach its lock boundary")
+        def contend(role, original):
+            """The winner holds its first lock until released; the loser signals before blocking on it."""
 
-        def admission_lock(user_id, *, using):
-            if winner == "deletion":
-                second_attempted.set()
-                return original_owner_lock(user_id, using=using)
-            owner = original_owner_lock(user_id, using=using)
-            hold_first()
-            return owner
+            def lock(*args, **kwargs):
+                if role != winner:
+                    second_attempted.set()
+                    return original(*args, **kwargs)
+                locked = original(*args, **kwargs)
+                first_locked.set()
+                if not release_first.wait(10):
+                    raise TimeoutError("second contender did not reach its lock boundary")
+                return locked
 
-        def deletion_locks(owner_by_id, conversations, *, using):
-            if winner == "admission":
-                second_attempted.set()
-                return original_bulk_locks(owner_by_id, conversations, using=using)
-            locked = original_bulk_locks(owner_by_id, conversations, using=using)
-            hold_first()
-            return locked
+            return lock
 
         def delete_contender():
             try:
-                if entrypoint == "single":
-                    try:
-                        return delete(self.request(), conversation.pk)
-                    except ConversationBusy as exc:
-                        return exc
-                return delete_many(self.request(), [conversation.pk])
+                if entrypoint == "bulk":
+                    return delete_many(self.request(), [conversation.pk])
+                return delete(self.request(), conversation.pk)
+            except ConversationBusy as exc:
+                return exc
             finally:
                 connections.close_all()
 
@@ -964,8 +953,16 @@ class BulkDeletionTransactionTests(CommittedTestCase):
                 connections.close_all()
 
         with (
-            patch.object(runs, "lock_conversation_reservations", side_effect=deletion_locks),
-            patch.object(runs, "_lock_owner", side_effect=admission_lock),
+            patch.object(
+                runs,
+                "lock_conversation_reservations",
+                side_effect=contend("deletion", runs.lock_conversation_reservations),
+            ),
+            patch.object(
+                runs,
+                "_lock_owner",
+                side_effect=contend("admission", runs._lock_owner),  # pylint: disable=protected-access
+            ),
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
             first = executor.submit(submit if winner == "admission" else delete_contender)
@@ -976,23 +973,26 @@ class BulkDeletionTransactionTests(CommittedTestCase):
             finally:
                 release_first.set()
             first_result, second_result = first.result(timeout=10), second.result(timeout=10)
-        admission, deletion_result = (
-            (first_result, second_result) if winner == "admission" else (second_result, first_result)
-        )
         if winner == "admission":
-            self.assertEqual(admission.kind, AdmissionKind.ADMITTED)
-            if entrypoint == "single":
-                self.assertIsInstance(deletion_result, ConversationBusy)
-                self.assertEqual(str(deletion_result), BUSY_MESSAGE)
-            else:
-                self.assertEqual(deletion_result, (0, [BUSY_MESSAGE]))
-            conversation.refresh_from_db()
-
-            self.assertTrue(AgentRun.objects.filter(pk=admission.run.pk, conversation=conversation).exists())
-            # Release this case's capacity only after checking the durable reservation.
-            AgentConversation.objects.filter(pk=conversation.pk).delete()
+            self._assert_admission_won(conversation, entrypoint, first_result, second_result)
         else:
-            self.assertEqual(admission.kind, AdmissionKind.CONVERSATION_NOT_FOUND)
-            self.assertEqual(deletion_result, None if entrypoint == "single" else (1, []))
-            self.assertFalse(AgentConversation.objects.filter(pk=conversation.pk).exists())
-            self.assertFalse(AgentRun.objects.filter(conversation_id=conversation.pk).exists())
+            self._assert_deletion_won(conversation, entrypoint, second_result, first_result)
+
+    def _assert_admission_won(self, conversation, entrypoint, admission, deletion_result):
+        self.assertEqual(admission.kind, AdmissionKind.ADMITTED)
+        if entrypoint == "single":
+            self.assertIsInstance(deletion_result, ConversationBusy)
+            self.assertEqual(str(deletion_result), BUSY_MESSAGE)
+        else:
+            self.assertEqual(deletion_result, (0, [BUSY_MESSAGE]))
+        conversation.refresh_from_db()
+
+        self.assertTrue(AgentRun.objects.filter(pk=admission.run.pk, conversation=conversation).exists())
+        # Release this case's capacity only after checking the durable reservation.
+        AgentConversation.objects.filter(pk=conversation.pk).delete()
+
+    def _assert_deletion_won(self, conversation, entrypoint, admission, deletion_result):
+        self.assertEqual(admission.kind, AdmissionKind.CONVERSATION_NOT_FOUND)
+        self.assertEqual(deletion_result, None if entrypoint == "single" else (1, []))
+        self.assertFalse(AgentConversation.objects.filter(pk=conversation.pk).exists())
+        self.assertFalse(AgentRun.objects.filter(conversation_id=conversation.pk).exists())

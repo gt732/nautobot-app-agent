@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from itertools import batched
 from time import perf_counter
 from uuid import UUID
 
@@ -117,7 +118,7 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
         except SoftTimeLimitExceeded:
             self._failed = True
             return self._state()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # tracing preparation must not interrupt the run
             self._failed = True
             logger.warning("Execution trace preparation failed (%s)", type(exc).__name__)
             return self._state()
@@ -132,22 +133,19 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
     def _flush(self, trace_id, run_status) -> TraceCaptureState:
         """Classify unfinished spans by the committed run status and persist rows in fixed batches."""
         self.freeze()
+        cancelled = run_status == AgentRunStatus.CANCELLED
+        unfinished_status = ExecutionStatus.CANCELLED if cancelled else ExecutionStatus.INCOMPLETE
         incomplete_count = 0
         with self.lock:
             for span in self.spans.values():
                 if span.ended_at is None:
                     span.ended_at = self._frozen_at
-                    span.status = (
-                        ExecutionStatus.CANCELLED
-                        if run_status == AgentRunStatus.CANCELLED
-                        else ExecutionStatus.INCOMPLETE
-                    )
-                    if span.status == ExecutionStatus.INCOMPLETE:
-                        self._failed = True
-                        incomplete_count += 1
+                    span.status = unfinished_status
+                    incomplete_count += not cancelled
                 span.details.update(event_log_details(span.events))
             spans = tuple(self.spans.values())
         if incomplete_count:
+            self._failed = True
             logger.warning("Execution trace has incomplete spans trace=%s count=%s", trace_id, incomplete_count)
         using = router.db_for_write(AgentExecutionSpan)
         conversation_id = (
@@ -159,55 +157,50 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
         if conversation_id is None:
             self._failed = True
             return self._state()
-        pending = []
-
-        def write_batch(rows):
-            with transaction.atomic(using=using):
-                # Guarded conversation deletion takes this lock before removing any spans.
-                # A trace lock alone would be too late to protect the child-deletion phase.
-                if not AgentConversation.objects.using(using).select_for_update().filter(pk=conversation_id).exists():
-                    return False
-                if not AgentExecutionTrace.objects.using(using).select_for_update().filter(pk=trace_id).exists():
-                    return False
-                AgentExecutionSpan.objects.using(using).bulk_create(rows)
-            self._committed = True
-            return True
-
-        def submit_batch():
-            nonlocal pending
-            if not pending:
-                return True
-            rows, pending = pending, []
-            try:
-                if not write_batch(rows):
-                    self._failed = True
-                    return False
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                self._failed = True
-                logger.warning("Execution trace batch failed trace=%s (%s)", trace_id, type(exc).__name__)
-                for row in rows:
-                    try:
-                        if not write_batch([row]):
-                            return False
-                    except SoftTimeLimitExceeded:
-                        raise
-                    except Exception as row_exc:  # pylint: disable=broad-exception-caught
-                        logger.warning(
-                            "Execution trace row failed trace=%s run=%s (%s)",
-                            trace_id,
-                            row.run_id,
-                            type(row_exc).__name__,
-                        )
-            return True
-
-        for span in spans:
-            pending.append(AgentExecutionSpan(**_prepared_values(trace_id, span)))
-            if len(pending) >= _BATCH_MAX_ROWS and not submit_batch():
-                return self._state()
-        submit_batch()
+        for batch in batched(spans, _BATCH_MAX_ROWS):
+            rows = [AgentExecutionSpan(**_prepared_values(trace_id, span)) for span in batch]
+            if not self._submit_batch(trace_id, conversation_id, using, rows):
+                break
         return self._state()
+
+    def _submit_batch(self, trace_id, conversation_id, using, rows):
+        """Write one batch, retrying row by row after a failure; ``False`` means the trace is gone."""
+        try:
+            if not self._write_batch(trace_id, conversation_id, using, rows):
+                self._failed = True
+                return False
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001  # failed batch writes must not interrupt the run
+            self._failed = True
+            logger.warning("Execution trace batch failed trace=%s (%s)", trace_id, type(exc).__name__)
+            for row in rows:
+                try:
+                    if not self._write_batch(trace_id, conversation_id, using, [row]):
+                        return False
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as row_exc:  # noqa: BLE001  # isolate an unpersistable span from the rest of the capture
+                    logger.warning(
+                        "Execution trace row failed trace=%s run=%s (%s)",
+                        trace_id,
+                        row.run_id,
+                        type(row_exc).__name__,
+                    )
+        return True
+
+    def _write_batch(self, trace_id, conversation_id, using, rows):
+        """Insert rows under the conversation and trace locks; ``False`` if either was deleted."""
+        with transaction.atomic(using=using):
+            # Guarded conversation deletion takes this lock before removing any spans.
+            # A trace lock alone would be too late to protect the child-deletion phase.
+            if not AgentConversation.objects.using(using).select_for_update().filter(pk=conversation_id).exists():
+                return False
+            if not AgentExecutionTrace.objects.using(using).select_for_update().filter(pk=trace_id).exists():
+                return False
+            AgentExecutionSpan.objects.using(using).bulk_create(rows)
+        self._committed = True
+        return True
 
     def _guard(self, callback):
         with self.lock:
@@ -215,7 +208,7 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
                 return
             try:
                 callback()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # callback failures must not interrupt agent execution
                 self._failed = True
                 logger.warning("Execution trace callback failed (%s)", type(exc).__name__)
 
@@ -267,7 +260,7 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
         if run_id in self.spans:
             self._error(run_id, error, callback_envelope(run_id, {"error": error}, kwargs))
 
-    def _begin(self, kind, serialized, arguments, run_id, parent_run_id, kwargs):  # pylint: disable=too-many-arguments
+    def _begin(self, kind, serialized, arguments, run_id, parent_run_id, kwargs):  # noqa: PLR0913  # LangChain callback fields
         payload = callback_envelope(run_id, {**arguments, "parent_run_id": parent_run_id}, kwargs)
         self._open(kind, serialized, run_id, parent_run_id, payload, **kwargs)
 
@@ -310,7 +303,7 @@ class _Recorder(BaseCallbackHandler):  # pylint: disable=too-many-public-methods
             summaries = {}
             try:
                 summaries = model_call_summaries(payload)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # trace summaries are best-effort while retaining the callback record
                 logger.warning("Execution trace summary failed (%s)", type(exc).__name__)
             self._close(run_id, output_data=payload, **summaries)
 
@@ -401,7 +394,7 @@ class ExecutionTrace:
                 AgentExecutionTrace.objects.using(using).filter(
                     pk=self._trace_id, capture_state=TraceCaptureState.PENDING, ended_at__isnull=False
                 ).update(capture_state=state)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # trace health persistence must not interrupt the run
             logger.warning("Execution trace capture health failed trace=%s (%s)", self._trace_id, type(exc).__name__)
         return state
 
@@ -422,7 +415,7 @@ class ExecutionTrace:
                 capture_state=TraceCaptureState.FAILED,
                 ended_at=timezone.now(),
             )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # trace abandonment must not interrupt worker teardown
             logger.warning("Execution trace abandonment failed trace=%s (%s)", trace_id, type(exc).__name__)
 
 
@@ -444,7 +437,7 @@ def start_trace(user, conversation, request) -> ExecutionTrace:
                 capture_state=TraceCaptureState.PENDING,
                 started_at=recorder.origin_at,
             )
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # trace startup failure must leave execution fail-open
         logger.warning("Execution trace start failed (%s)", type(exc).__name__)
         return ExecutionTrace()
     return ExecutionTrace(recorder, row.pk)

@@ -3,7 +3,7 @@
 import contextlib
 import json
 import logging
-from collections.abc import Callable, Generator, Iterable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from functools import partial
 from typing import Any, cast
 
@@ -82,15 +82,16 @@ def tool_error(error: str, message: str, **extra: Any) -> ToolException:
     return ToolException(dumps({"error": error, "message": message, **extra}))
 
 
-def _matching_prefix(
-    location: tuple[str | int, ...], prefixes: Iterable[tuple[str | int | None, ...]]
-) -> tuple[str | int | None, ...] | None:
-    """Select the most specific configured scope; None matches one location component."""
-    for prefix in sorted(prefixes, key=len, reverse=True):
+def _most_specific[T](
+    location: tuple[str | int, ...], scoped: Mapping[tuple[str | int | None, ...], T] | None
+) -> T | None:
+    """Return the value of the most specific configured scope; None in a scope matches one location component."""
+    guidance = scoped or {}
+    for prefix in sorted(guidance, key=len, reverse=True):
         if len(location) >= len(prefix) and all(
             expected is None or expected == actual for expected, actual in zip(prefix, location, strict=False)
         ):
-            return prefix
+            return guidance[prefix]
     return None
 
 
@@ -104,29 +105,27 @@ def _validation_guidance(
     """Resolve fixed repair guidance from sanitized diagnostic metadata only."""
     loc = error["loc"]
     error_type = error["type"]
-    msg = error["msg"]
-    stripped = msg.removeprefix(_VALUE_ERROR_PREFIX)
-    override_prefix = _matching_prefix(loc, value_error_guidance or {})
-    overrides = value_error_guidance[override_prefix] if value_error_guidance and override_prefix is not None else None
-    scope = _matching_prefix(loc, scoped_guidance or {})
+    stripped = error["msg"].removeprefix(_VALUE_ERROR_PREFIX)
+    locations = location_guidance or {}
+    overrides = _most_specific(loc, value_error_guidance) or {}
+    scope_hint = _most_specific(loc, scoped_guidance)
     if error_type == "extra_forbidden" and len(loc) == 1:
         repair = _VALIDATION_TYPE_GUIDANCE["extra_forbidden"]
-    elif error_type == "value_error" and overrides is not None and stripped in overrides:
+    elif error_type == "value_error" and stripped in overrides:
         repair = overrides[stripped]
     else:
         repair = _VALIDATION_TYPE_GUIDANCE.get(error_type, _GENERIC_VALIDATION_GUIDANCE)
         location = loc[0] if loc else None
         if (
             isinstance(location, str)
-            and scope is None
-            and location_guidance is not None
-            and location in location_guidance
+            and scope_hint is None
+            and location in locations
             and location not in shown_locations
         ):
-            repair += " " + location_guidance[location]
+            repair += " " + locations[location]
             shown_locations.add(location)
-    if scoped_guidance and scope is not None:
-        repair += " " + scoped_guidance[scope]
+    if scope_hint is not None:
+        repair += " " + scope_hint
     return f"{repair} {_RETRY_SAFETY_GUIDANCE}"
 
 

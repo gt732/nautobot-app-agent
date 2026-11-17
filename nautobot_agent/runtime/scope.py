@@ -81,7 +81,7 @@ def bind_scope_decision(model):
                 ScopeDecision, method="json_mode"
             )
         return model.with_structured_output(ScopeDecision)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # provider binding failures map to safe failure categories
         raise _classification_failure(exc) from None
 
 
@@ -112,7 +112,7 @@ def classify_request(
             )
         messages.append(HumanMessage(f"Current user request:\n{text}"))
         decision = classifier.invoke(messages, config)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # provider inference failures map to safe failure categories
         raise _classification_failure(exc) from None
     if not isinstance(decision, ScopeDecision):
         raise _classification_failure(TypeError()) from None

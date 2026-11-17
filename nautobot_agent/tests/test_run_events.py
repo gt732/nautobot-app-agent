@@ -88,7 +88,7 @@ class RunEventStreamTests(SimpleTestCase):
             try:
                 barrier.wait(timeout=5)
                 pages[run_id] = read_run_events(run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # worker threads forward any failure to the test assertion
                 failures.append(exc)
 
         workers = [threading.Thread(target=read, args=(run_id,)) for run_id in expected]

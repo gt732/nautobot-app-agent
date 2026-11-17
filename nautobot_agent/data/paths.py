@@ -101,30 +101,30 @@ def resolve_path(model: type[Model], path: str) -> ResolvedPath:
     crosses_unsupported_relation = any(
         field is not None and field.is_relation and not _is_forward_fk(field) for _, _, field in steps
     )
-    terminal_field = next((field for _, _, field in reversed(steps) if field is not None), None)
+    terminal_index, _, terminal_field = next(
+        (step for step in reversed(steps) if step[2] is not None), (-1, None, None)
+    )
     brief_field = (
         terminal_field if isinstance(terminal_field, ForeignKey) and parts[-1] == terminal_field.name else None
     )
-    terminal_index = next((index for index, _, field in reversed(steps) if field is not None), -1)
     forward_hops = tuple(
         ForwardHop(LOOKUP_SEP.join([*parts[:index], field.attname]), field)
         for index, _, field in steps
         if index < terminal_index and _is_forward_fk(field)
     )
     local_field = None
+    # Reverse relations have no ``attname``; the concrete-field check must come first.
     if len(parts) == 1 and terminal_field is not None and terminal_field in meta(model).concrete_fields:
-        if parts[0] in (terminal_field.name, terminal_field.attname) or (
+        names_field = parts[0] in (terminal_field.name, terminal_field.attname) or (
             parts[0] == "pk" and terminal_field.primary_key
-        ):
+        )
+        if names_field:
             local_field = terminal_field
+    # The walk stops at the first unresolved part, so a resolved final step means the whole path resolved.
     stored_parts = list(parts)
-    for index, _, field in steps:
-        if field is None:
-            break
-        if index == len(parts) - 1:
-            if isinstance(field, ForeignKey) and field.concrete:
-                stored_parts[index] = cast(str, field.attname)
-            break
+    last_index, _, last_field = steps[-1]
+    if last_index == len(parts) - 1 and _is_forward_fk(last_field):
+        stored_parts[-1] = cast(str, last_field.attname)
     return ResolvedPath(
         path,
         steps,
@@ -159,29 +159,33 @@ def _walk_path(model: type[Model], path: str) -> Iterator[tuple[int, Any, Any]]:
         opts = related_model._meta if related_model is not None else None
 
 
+# First match wins: OneToOneField subclasses ForeignKey and OneToOneRel subclasses ManyToOneRel. The second
+# element, when set, is the forward field class the reverse relation's ``field`` must be.
+_RELATION_KINDS: tuple[tuple[type, type | None, RelationKind, bool], ...] = (
+    (OneToOneField, None, "one_to_one", False),
+    (ForeignKey, None, "foreign_key", False),
+    (ManyToManyField, None, "many_to_many", True),
+    (OneToOneRel, OneToOneField, "reverse_one_to_one", False),
+    (ManyToOneRel, ForeignKey, "reverse_foreign_key", True),
+    (ManyToManyRel, ManyToManyField, "reverse_many_to_many", True),
+)
+
+
 def standard_relation(field: Any) -> StandardRelation | None:
     """Classify ``field`` as a standard relation, or ``None`` for nonstandard relations and non-model targets."""
-    many = False
-    if isinstance(field, OneToOneField):
-        kind: RelationKind = "one_to_one"
-    elif isinstance(field, ForeignKey):
-        kind = "foreign_key"
-    elif isinstance(field, ManyToManyField):
-        kind = "many_to_many"
-        many = True
-    elif isinstance(field, OneToOneRel) and isinstance(field.field, OneToOneField):
-        kind = "reverse_one_to_one"
-    elif isinstance(field, ManyToOneRel) and isinstance(field.field, ForeignKey):
-        kind = "reverse_foreign_key"
-        many = True
-    elif isinstance(field, ManyToManyRel) and isinstance(field.field, ManyToManyField):
-        kind = "reverse_many_to_many"
-        many = True
-    else:
+    classified = next(
+        (
+            (kind, many)
+            for field_class, forward_class, kind, many in _RELATION_KINDS
+            if isinstance(field, field_class) and (forward_class is None or isinstance(field.field, forward_class))
+        ),
+        None,
+    )
+    if classified is None:
         return None
-
+    kind, many = classified
     target = getattr(field, "related_model", None)
-    if target is None or not isinstance(target, type) or not issubclass(target, Model):
+    if not (isinstance(target, type) and issubclass(target, Model)):
         return None
     if isinstance(field, OneToOneRel | ManyToOneRel | ManyToManyRel):
         accessor = field.get_accessor_name()
@@ -189,7 +193,7 @@ def standard_relation(field: Any) -> StandardRelation | None:
             return None
     else:
         accessor = field.name
-    return StandardRelation(kind=kind, accessor=accessor, query_name=cast(Any, field).name, many=many, target=target)
+    return StandardRelation(kind=kind, accessor=accessor, query_name=field.name, many=many, target=target)
 
 
 def meta(model: type[Model]) -> Any:

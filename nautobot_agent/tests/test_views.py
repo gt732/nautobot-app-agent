@@ -114,7 +114,7 @@ class AgentViewTestCase(TestCase):
 
     def test_departure_cookie_expires_only_matching_plain_selection_at_boundary(
         self,
-    ):  # pylint: disable=too-many-locals,too-many-statements
+    ):  # pylint: disable=too-many-locals
         page_url = reverse("plugins:nautobot_agent:agent")
         conversation = create_conversation(self.user)
         other = create_conversation(self.user)

@@ -42,7 +42,7 @@ class DurableRunHttpSmokeTests(DurableSourceGraphTestCase):  # pylint: disable=t
             def execute():
                 try:
                     result.append(execute_chat_run.apply(args=(str(run_id),), throw=True))
-                except Exception as exc:  # pylint: disable=broad-exception-caught
+                except Exception as exc:  # noqa: BLE001  # the task thread forwards any failure to the test assertion
                     result.append(exc)
                 finally:
                     connections.close_all()

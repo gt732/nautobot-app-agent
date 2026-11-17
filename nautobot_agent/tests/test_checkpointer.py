@@ -156,7 +156,7 @@ class CheckpointStorageTests(TestCase):
         config = self.guarded_config(checkpoint_id=checkpoint_id)
         self.saver.put_writes(config, writes, task_id, task_path)
 
-    def save_checkpoint(  # pylint: disable=too-many-arguments
+    def save_checkpoint(
         self, checkpoint_id, parent_id=None, values=None, checkpoint_ns="", channel_versions=None, metadata=None
     ):
         """Save a checkpoint with fixture-specified values and channel versions."""
@@ -205,7 +205,7 @@ class CheckpointStorageTests(TestCase):
         with self.assertRaisesRegex(ValueError, "Checkpoint ID must increase"):
             self.save_checkpoint("0001", parent_id)
 
-    def test_delta_history_replay(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_delta_history_replay(self):  # pylint: disable=too-many-locals
         root = self.save_checkpoint("0001", values={"channel": "seed", "empty": None, "list": []})
         root_id = root["configurable"]["checkpoint_id"]
         child = self.save_checkpoint("0002", root_id, {"other": "other-seed"})

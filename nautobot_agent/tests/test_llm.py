@@ -277,9 +277,11 @@ class NativeScopeDecisionParsingTests(SimpleTestCase):
                         decision = classify_request(classifier, "Is this request in scope?")
                     self.assertEqual(decision, ScopeDecision(allowed=allowed))
 
-                with self._response_boundary(model, provider, self._sdk_response(provider, marker)):
-                    with self.assertRaises(ImproperlyConfigured) as caught:
-                        classify_request(classifier, "Is this request in scope?")
+                with (
+                    self._response_boundary(model, provider, self._sdk_response(provider, marker)),
+                    self.assertRaises(ImproperlyConfigured) as caught,
+                ):
+                    classify_request(classifier, "Is this request in scope?")
                 error = caught.exception
                 self.assertNotIn(marker, str(error))
                 self.assertNotIn(marker, "".join(traceback.format_exception(error)))

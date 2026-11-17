@@ -80,42 +80,52 @@ def tool_entries(messages: Sequence[BaseMessage], pending_status: ToolStatus) ->
     unresolved: dict[str, tuple[ToolEntry, ToolCall]] = {}
     for message in messages:
         if isinstance(message, AIMessage):
-            counts = Counter(call["id"] for call in message.tool_calls)
-            for index, call in enumerate(message.tool_calls):
-                has_native_id = bool(call["id"]) and counts[call["id"]] == 1
-                entry: ToolEntry = {
-                    "id": _display_id(
-                        message.id,
-                        "tool" if has_native_id else "tool-index",
-                        call["id"] if has_native_id else index,
-                    ),
-                    "name": call["name"],
-                    "args": call["args"],
-                    "status": pending_status,
-                }
+            for entry, call in _request_entries(message, pending_status):
                 entries.append((message, entry))
-                if has_native_id:
-                    unresolved[call["id"]] = (entry, call)
-            for index, invalid in enumerate(message.invalid_tool_calls):
-                invalid_entry: ToolEntry = {
-                    "id": _display_id(message.id, "invalid", index),
-                    "name": invalid["name"] or "unknown",
-                    "args": invalid["args"],
-                    "status": "failed",
-                }
-                entries.append((message, invalid_entry))
-        elif isinstance(message, ToolMessage):
-            associated = unresolved.pop(message.tool_call_id, None)
-            if associated is None:
-                continue
+                # Calls are carried only with a unique, non-empty native ID.
+                if call is not None and (call_id := call["id"]):
+                    unresolved[call_id] = (entry, call)
+        elif isinstance(message, ToolMessage) and (associated := unresolved.pop(message.tool_call_id, None)):
             entry, call = associated
-            if message.status != "error":
-                entry["status"] = "completed"
-            elif _is_interrupted_repair(message.content, call["name"], message.tool_call_id):
-                entry["status"] = "unknown"
-            else:
-                entry["status"] = "failed"
+            entry["status"] = _result_status(message, call["name"])
     return entries
+
+
+def _request_entries(message: AIMessage, pending_status: ToolStatus) -> list[tuple[ToolEntry, ToolCall | None]]:
+    """Project one assistant message's calls; only calls with a unique native ID carry the call for result matching."""
+    counts = Counter(call["id"] for call in message.tool_calls)
+    entries: list[tuple[ToolEntry, ToolCall | None]] = []
+    for index, call in enumerate(message.tool_calls):
+        has_native_id = bool(call["id"]) and counts[call["id"]] == 1
+        entry: ToolEntry = {
+            "id": _display_id(
+                message.id,
+                "tool" if has_native_id else "tool-index",
+                call["id"] if has_native_id else index,
+            ),
+            "name": call["name"],
+            "args": call["args"],
+            "status": pending_status,
+        }
+        entries.append((entry, call if has_native_id else None))
+    for index, invalid in enumerate(message.invalid_tool_calls):
+        invalid_entry: ToolEntry = {
+            "id": _display_id(message.id, "invalid", index),
+            "name": invalid["name"] or "unknown",
+            "args": invalid["args"],
+            "status": "failed",
+        }
+        entries.append((invalid_entry, None))
+    return entries
+
+
+def _result_status(message: ToolMessage, name: str) -> ToolStatus:
+    """Classify a matched result without exposing its text."""
+    if message.status != "error":
+        return "completed"
+    if _is_interrupted_repair(message.content, name, message.tool_call_id):
+        return "unknown"
+    return "failed"
 
 
 def project_tool_entry(entry: ToolEntry) -> ToolEntry:

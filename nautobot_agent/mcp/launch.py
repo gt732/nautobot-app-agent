@@ -187,7 +187,7 @@ def text_tool_content(content):
     ]
 
 
-async def _converted_call(  # pylint: disable=too-many-arguments
+async def _converted_call(  # noqa: PLR0913  # one MCP call with its session callbacks
     client,
     definition,
     arguments,
@@ -237,13 +237,11 @@ class FreshOperations:
         elicitation = Elicitation()
         session = ClientSession(self._client_factory(elicitation.decline))
         self._sessions[id(session.client)] = session
-        result = None
-        operation_error = None
         try:
             async with asyncio.timeout(max(0, deadline - asyncio.get_running_loop().time())):
                 await session.enter()
                 self._require_open()
-                result = await _converted_call(
+                return await _converted_call(
                     session.client,
                     definition,
                     arguments,
@@ -251,18 +249,14 @@ class FreshOperations:
                     on_unresolved,
                     self._require_open,
                 )
-        except BaseException as exc:  # pylint: disable=broad-exception-caught
-            operation_error = exc
-        try:
-            cleanup_confirmed = await session.close(deadline)
-        except BaseException as exc:  # pylint: disable=broad-exception-caught
-            cleanup_confirmed = False
-            _log_cleanup_error(exc)
-        if cleanup_confirmed:
-            self._sessions.pop(id(session.client), None)
-        if operation_error is not None:
-            raise operation_error
-        return result
+        finally:
+            try:
+                cleanup_confirmed = await session.close(deadline)
+            except BaseException as exc:  # noqa: BLE001  # cleanup failure, even cancellation, never replaces the operation outcome
+                cleanup_confirmed = False
+                _log_cleanup_error(exc)
+            if cleanup_confirmed:
+                self._sessions.pop(id(session.client), None)
 
     async def close(self, deadline):
         """Close all outstanding clients under a shared cleanup deadline."""

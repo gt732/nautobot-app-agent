@@ -174,7 +174,7 @@ class MCPToolBehaviorTests(SimpleTestCase):
         def invoke(state):
             try:
                 return {"result": tool.invoke(state["arguments"])}
-            except Exception:  # pylint: disable=broad-exception-caught
+            except Exception:
                 if not catch_errors:
                     raise
                 return {"result": "graph caught tool failure"}
@@ -524,9 +524,8 @@ class MCPStdioLifecycleTests(SimpleTestCase):
         self.assertEqual((repeated["pid"], repeated["value"]), (first["pid"], "turn-one"))
         self.assertEqual((repeated["profile"], repeated["gui"]), ("profile-value", "literal"))
         self.assertIsNone(repeated["worker_secret"])
-        with patch.object(mcp_turn, "OPERATION_TIMEOUT_SECONDS", 0.2):
-            with self.assertRaises(MCPUnavailableError):
-                self.call(turn, "wait_forever")
+        with patch.object(mcp_turn, "OPERATION_TIMEOUT_SECONDS", 0.2), self.assertRaises(MCPUnavailableError):
+            self.call(turn, "wait_forever")
         self.assertEqual(turn.close(timeout=2), MCPCleanupResult(cleanup_confirmed=True, external_outcome_unknown=True))
         self.assert_process_exited(first["pid"])
         with self.assertRaises(MCPUnavailableError):
@@ -793,18 +792,20 @@ class MCPToolCacheBehaviorTests(SimpleTestCase):
         self.enterContext(patched_launches(launch_factory))
 
         original_require_open = MCPTurn.require_open
-        follower_entry_check_done = False
+        follower_checks = 0
 
         def pause_after_follower_wait(turn):
-            nonlocal follower_entry_check_done
+            nonlocal follower_checks
             original_require_open(turn)
-            if turn is follower:
-                if follower_entry_check_done:
-                    follower_waiting.set()
-                    if not release_follower.wait(5):
-                        raise TimeoutError("timed-wait promotion was not released")
-                else:
-                    follower_entry_check_done = True
+            if turn is not follower:
+                return
+            follower_checks += 1
+            # The first check is the follower's entry; later ones follow its timed wait.
+            if follower_checks == 1:
+                return
+            follower_waiting.set()
+            if not release_follower.wait(5):
+                raise TimeoutError("timed-wait promotion was not released")
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         try:

@@ -134,33 +134,23 @@ def ty(context, target: list[str] | None = None):
     },
     iterable=["action", "target"],
 )
-def ruff(  # pylint: disable=too-many-arguments
+def ruff(  # noqa: PLR0913  # each parameter is an Invoke CLI flag
     context, action=None, target=None, fix=False, diff=False, output_format="concise"
 ):
     """Run ruff formatting and lint checks."""
     action = action or ["lint", "format"]
     target = target or ["."]
-    exit_code = 0
+    commands = []
     if "format" in action:
-        args = ["format"]
-        if not fix:
-            args.append("--check")
-            if diff:
-                args.append("--diff")
-        args.extend(target)
-        if not context.run(python_module("ruff", *args), warn=True):
-            exit_code = 1
+        mode = [] if fix else ["--check", "--diff"] if diff else ["--check"]
+        commands.append(["format", *mode, *target])
     if "lint" in action:
-        args = ["check"]
-        if fix:
-            args.append("--fix")
-        elif diff:
-            args.append("--diff")
-        args.extend(["--output-format", output_format, *target])
-        if not context.run(python_module("ruff", *args), warn=True):
-            exit_code = 1
-    if exit_code:
-        raise Exit(code=exit_code)
+        mode = ["--fix"] if fix else ["--diff"] if diff else []
+        commands.append(["check", *mode, "--output-format", output_format, *target])
+    # Run every selected action before failing so one report does not hide the other.
+    failed = [args for args in commands if not context.run(python_module("ruff", *args), warn=True)]
+    if failed:
+        raise Exit(code=1)
 
 
 @task(help={"target": "File or directory to inspect; repeatable (default: all files)."}, iterable=["target"])
@@ -215,7 +205,7 @@ def _validate_durations(durations):
         "keepdb": "Reuse the test database (default: True); pass --no-keepdb after editing applied migrations.",
     }
 )
-def unittest(  # pylint: disable=too-many-arguments
+def unittest(  # noqa: PLR0913  # each parameter is an Invoke CLI flag
     context,
     label="nautobot_agent",
     failfast=False,
@@ -278,7 +268,7 @@ def coverage_lcov(context):
         "durations": "Show the N slowest Django tests; 0 shows all durations (default: disabled).",
     }
 )
-def tests(  # pylint: disable=too-many-arguments
+def tests(  # noqa: PLR0913  # each parameter is an Invoke CLI flag
     context,
     failfast=False,
     no_input=False,

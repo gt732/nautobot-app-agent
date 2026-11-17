@@ -330,7 +330,7 @@ def parse_run_events(response):
     return [(entry["event"], entry["data"]) for entry in response.json()["events"]]
 
 
-def enable_agent_settings(  # pylint: disable=too-many-arguments
+def enable_agent_settings(
     test_case,
     credentials=None,
     *,
@@ -425,7 +425,7 @@ def create_reserved_run(conversation, *, prompt, client_request_id=None):
     now = timezone.now()
     using = router.db_for_write(AgentRun, instance=conversation)
     with transaction.atomic(using=using):
-        run = AgentRun.objects.using(using).create(
+        return AgentRun.objects.using(using).create(
             user_id=conversation.user_id,
             conversation=conversation,
             client_request_id=client_request_id or uuid.uuid4(),
@@ -436,7 +436,6 @@ def create_reserved_run(conversation, *, prompt, client_request_id=None):
             soft_time_limit=policy.soft_time_limit,
             cleanup_timeout=policy.cleanup_timeout,
         )
-    return run
 
 
 def create_refused_run(conversation, prompt, anchor_id=""):

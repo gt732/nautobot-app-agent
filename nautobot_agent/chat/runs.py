@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class RunPublisher(Protocol):  # pylint: disable=too-few-public-methods
     """Publish an admitted run with explicitly named resource limits."""
 
-    def __call__(  # pylint: disable=too-many-arguments
+    def __call__(  # noqa: PLR0913  # publisher contract names each time limit explicitly
         self,
         run_id: UUID,
         user_id: UUID,
@@ -253,7 +253,7 @@ def lock_conversation_reservations(
     return [(conversation, conversation.pk in reserved_ids) for conversation in authorized]
 
 
-def submit_run(  # pylint: disable=too-many-arguments
+def submit_run(
     user,
     client_request_id: UUID,
     prompt: str,
@@ -290,7 +290,7 @@ def submit_run(  # pylint: disable=too-many-arguments
             hard=policy.hard_time_limit,
             cleanup=policy.cleanup_timeout,
         )
-    except Exception as error:  # pylint: disable=broad-exception-caught
+    except Exception as error:  # noqa: BLE001  # any broker failure finishes the committed run as dispatch-failed
         _resolve_dispatch_failure(
             run_id,  # ty: ignore[invalid-argument-type] Nautobot UUIDField descriptor is typed as the field.
             type(error).__name__,
@@ -353,7 +353,7 @@ def reconcile_run(run_id: UUID) -> AgentRun | None:
         return locked.run
 
 
-def _admit(  # pylint: disable=too-many-arguments
+def _admit(  # noqa: PLR0913  # admission decision inputs resolved under one lock sequence
     user_id, request_id: UUID, prompt: str, conversation_id: UUID | None, policy, *, using: str
 ) -> AdmissionResult:
     """Decide admission under user -> conversation -> run locks; create the reserved run if admitted."""
@@ -378,26 +378,10 @@ def _admit(  # pylint: disable=too-many-arguments
         )
         if conversation is None:
             return AdmissionResult(AdmissionKind.CONVERSATION_NOT_FOUND)
-        for blocker in (
-            AgentRun.objects.using(using)
-            .with_queue_warning()
-            .active()
-            .select_for_update()
-            .filter(conversation_id=conversation.pk)
-            .order_by("pk")
-        ):
-            _reconcile_locked(LockedRun(owner, conversation, blocker, using))
-            if not blocker.is_terminal:
-                return AdmissionResult(AdmissionKind.BUSY, blocker=blocker)
-    active_count = 0
-    for run_id in (
-        AgentRun.objects.using(using).active().filter(user_id=owner.pk).order_by("pk").values_list("pk", flat=True)
-    ):
-        locked = _lock_run(run_id, using=using)
-        if locked is not None:
-            _reconcile_locked(locked)
-            active_count += not locked.run.is_terminal
-    if active_count >= _MAX_ACTIVE_RUNS_PER_USER:
+        blocker = _active_blocker(owner, conversation, using=using)
+        if blocker is not None:
+            return AdmissionResult(AdmissionKind.BUSY, blocker=blocker)
+    if _active_run_count(owner, using=using) >= _MAX_ACTIVE_RUNS_PER_USER:
         return AdmissionResult(AdmissionKind.USER_LIMIT)
     if conversation is None:
         now = timezone.now()
@@ -422,6 +406,35 @@ def _admit(  # pylint: disable=too-many-arguments
     )
     run.refresh_from_db(using=using, fields=("submitted_at", "queue_expires_at"))
     return AdmissionResult(AdmissionKind.ADMITTED, run=run)
+
+
+def _active_blocker(owner, conversation: AgentConversation, *, using: str) -> AgentRun | None:
+    """Lock and reconcile the conversation's active runs in key order; return the first still active."""
+    for blocker in (
+        AgentRun.objects.using(using)
+        .with_queue_warning()
+        .active()
+        .select_for_update()
+        .filter(conversation_id=conversation.pk)
+        .order_by("pk")
+    ):
+        _reconcile_locked(LockedRun(owner, conversation, blocker, using))
+        if not blocker.is_terminal:
+            return blocker
+    return None
+
+
+def _active_run_count(owner, *, using: str) -> int:
+    """Lock and reconcile each of the owner's active runs in key order; count those still active."""
+    count = 0
+    for run_id in (
+        AgentRun.objects.using(using).active().filter(user_id=owner.pk).order_by("pk").values_list("pk", flat=True)
+    ):
+        locked = _lock_run(run_id, using=using)
+        if locked is not None:
+            _reconcile_locked(locked)
+            count += not locked.run.is_terminal
+    return count
 
 
 def _resolve_dispatch_failure(run_id: UUID, code: str) -> None:
@@ -519,7 +532,7 @@ def _set_trace_outcome(run: AgentRun, *, using: str) -> None:
                 trace.capture_state = TraceCaptureState.FAILED
                 fields.append("capture_state")
             trace.save(using=using, update_fields=fields)
-    except Exception as error:  # pylint: disable=broad-exception-caught
+    except Exception as error:  # noqa: BLE001  # optional trace outcome must not block run reconciliation
         logger.warning("Optional run trace outcome failed (%s).", type(error).__name__)
 
 

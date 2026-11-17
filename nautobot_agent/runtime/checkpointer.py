@@ -115,34 +115,35 @@ class DjangoCheckpointSaver(BaseCheckpointSaver[int]):  # pylint: disable=abstra
             return {}
 
         configurable = cast(dict, config)["configurable"]
+        target = self.get_tuple(config)
+        if target is None:
+            if configurable.get("checkpoint_id"):
+                raise RuntimeError("Checkpoint history is unavailable; reload the conversation.")
+            return {channel: {"writes": []} for channel in channels}
+        result: dict[str, DeltaChannelHistory] = {channel: {"writes": []} for channel in channels}
+        # LangGraph version keys persist after the first update, unlike periodically stored delta values.
+        remaining = set(channels).intersection(target.checkpoint["channel_versions"])
+        if target.parent_config is None:
+            # A reader may hold the pre-prune payload of a row now rewritten as a root snapshot.
+            values = target.checkpoint["channel_values"]
+            result.update(
+                {
+                    channel: {"seed": values[channel], "writes": []}
+                    for channel in remaining
+                    if isinstance(values.get(channel), _DeltaSnapshot)
+                }
+            )
+        elif remaining:
+            cursor_id = cast(dict, target.parent_config)["configurable"]["checkpoint_id"]
+            self._collect_ancestor_history(configurable, cursor_id, channels, remaining, result)
+        return result
+
+    def _collect_ancestor_history(self, configurable, cursor_id, channels, remaining, result) -> None:
+        """Walk parents newest-first, collecting writes until every remaining channel reaches a stored seed."""
         thread_id = str(configurable["thread_id"])
         rows = self._complete_checkpoints().filter(
             conversation_id=thread_id,
             checkpoint_ns=configurable.get("checkpoint_ns", ""),
-        )
-        target = self.get_tuple(config)
-        if target is None and configurable.get("checkpoint_id"):
-            raise RuntimeError("Checkpoint history is unavailable; reload the conversation.")
-        result: dict[str, DeltaChannelHistory] = {channel: {"writes": []} for channel in channels}
-        remaining = set(channels)
-        # LangGraph version keys persist after the first update, unlike periodically stored delta values.
-        if target is not None:
-            remaining.intersection_update(target.checkpoint["channel_versions"])
-            # A reader may hold the pre-prune payload of a row now rewritten as a root snapshot.
-            root_values = target.checkpoint["channel_values"] if target.parent_config is None else {}
-            root_values = {
-                channel: root_values[channel]
-                for channel in remaining
-                if isinstance(root_values.get(channel), _DeltaSnapshot)
-            }
-            result.update({channel: {"seed": seed, "writes": []} for channel, seed in root_values.items()})
-            remaining.difference_update(root_values)
-        else:
-            remaining.clear()
-        cursor_id = (
-            cast(dict, target.parent_config)["configurable"]["checkpoint_id"]
-            if target is not None and target.parent_config is not None
-            else None
         )
         rows = rows.prefetch_related(
             Prefetch(
@@ -150,23 +151,19 @@ class DjangoCheckpointSaver(BaseCheckpointSaver[int]):  # pylint: disable=abstra
                 queryset=AgentCheckpointWrite.objects.filter(channel__in=channels).order_by("task_id", "idx"),
             )
         )
-        for row in self._root_chain(rows, cursor_id if remaining else None):
+        for row in self._root_chain(rows, cursor_id):
             checkpoint = self._checkpoint_tuple(row, thread_id)
-            if checkpoint.pending_writes:
-                for write in reversed(checkpoint.pending_writes):
-                    channel = write[1]
-                    if channel in remaining:
-                        result[channel]["writes"].append(write)
-            for channel in tuple(remaining):
-                if channel in checkpoint.checkpoint["channel_values"]:
-                    result[channel]["seed"] = checkpoint.checkpoint["channel_values"][channel]
-                    remaining.remove(channel)
+            for write in reversed(checkpoint.pending_writes or ()):
+                if write[1] in remaining:
+                    result[write[1]]["writes"].append(write)
+            values = checkpoint.checkpoint["channel_values"]
+            for channel in remaining.intersection(values):
+                result[channel]["seed"] = values[channel]
+            remaining.difference_update(values)
             if not remaining:
                 break
-
-        for channel in result:
-            result[channel]["writes"].reverse()
-        return result
+        for history in result.values():
+            history["writes"].reverse()
 
     def _root_chain(self, rows, start_id) -> Iterator[AgentCheckpoint]:
         """Follow actual parents using bounded windows, with caller-owned loading policy."""
@@ -256,16 +253,15 @@ class DjangoCheckpointSaver(BaseCheckpointSaver[int]):  # pylint: disable=abstra
         """Discard finished subagents and root history preceding all required delta seeds."""
         thread_id = str(cast(dict, config)["configurable"]["thread_id"])
         try:
-            with require_run_guard(config).write(thread_id):
-                with cast(AbstractContextManager, transaction.atomic()):
-                    rows = AgentCheckpoint.objects.filter(conversation_id=thread_id)
-                    boundary = self._root_retention_boundary(thread_id)
-                    if boundary is None:
-                        boundary = self._snapshot_root(thread_id, channels)
-                    if boundary is not None:
-                        rows.filter(checkpoint_ns="", checkpoint_id__lt=boundary).only("pk").delete()
-                        rows.filter(checkpoint_ns="", checkpoint_id=boundary).update(parent_checkpoint_id=None)
-                    rows.exclude(checkpoint_ns="").only("pk").delete()
+            with require_run_guard(config).write(thread_id), cast(AbstractContextManager, transaction.atomic()):
+                rows = AgentCheckpoint.objects.filter(conversation_id=thread_id)
+                boundary = self._root_retention_boundary(thread_id)
+                if boundary is None:
+                    boundary = self._snapshot_root(thread_id, channels)
+                if boundary is not None:
+                    rows.filter(checkpoint_ns="", checkpoint_id__lt=boundary).only("pk").delete()
+                    rows.filter(checkpoint_ns="", checkpoint_id=boundary).update(parent_checkpoint_id=None)
+                rows.exclude(checkpoint_ns="").only("pk").delete()
         finally:
             close_connections()
 
@@ -322,26 +318,25 @@ class DjangoCheckpointSaver(BaseCheckpointSaver[int]):  # pylint: disable=abstra
             for index, (channel, value) in enumerate(writes)
         ]
         try:
-            with require_run_guard(config).write(thread_id):
-                with cast(AbstractContextManager, transaction.atomic()):
-                    checkpoint, _ = AgentCheckpoint.objects.get_or_create(
-                        conversation_id=thread_id,
-                        checkpoint_ns=configurable.get("checkpoint_ns", ""),
-                        checkpoint_id=configurable["checkpoint_id"],
-                    )
-                    for idx, channel, value_type, value_blob in encoded:
-                        defaults = {
-                            "channel": channel,
-                            "value_type": value_type,
-                            "value": value_blob,
-                        }
-                        if idx >= 0:
-                            AgentCheckpointWrite.objects.get_or_create(
-                                checkpoint=checkpoint, task_id=task_id, idx=idx, defaults=defaults
-                            )
-                        else:
-                            AgentCheckpointWrite.objects.update_or_create(
-                                checkpoint=checkpoint, task_id=task_id, idx=idx, defaults=defaults
-                            )
+            with require_run_guard(config).write(thread_id), cast(AbstractContextManager, transaction.atomic()):
+                checkpoint, _ = AgentCheckpoint.objects.get_or_create(
+                    conversation_id=thread_id,
+                    checkpoint_ns=configurable.get("checkpoint_ns", ""),
+                    checkpoint_id=configurable["checkpoint_id"],
+                )
+                for idx, channel, value_type, value_blob in encoded:
+                    defaults = {
+                        "channel": channel,
+                        "value_type": value_type,
+                        "value": value_blob,
+                    }
+                    if idx >= 0:
+                        AgentCheckpointWrite.objects.get_or_create(
+                            checkpoint=checkpoint, task_id=task_id, idx=idx, defaults=defaults
+                        )
+                    else:
+                        AgentCheckpointWrite.objects.update_or_create(
+                            checkpoint=checkpoint, task_id=task_id, idx=idx, defaults=defaults
+                        )
         finally:
             close_connections()

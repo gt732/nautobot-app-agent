@@ -69,7 +69,7 @@ def transcript(target: AgentConversation) -> Transcript:
     """Read retained user/assistant text without constructing an agent."""
     try:
         return Transcript(chat_history.read_transcript(target), True)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # an unreadable transcript is shown as unavailable
         logger.error("Conversation transcript read failed (%s)", type(exc).__name__)
         return Transcript([], False)
 
@@ -132,7 +132,7 @@ def restore_state(selected: AgentConversation | None) -> tuple[dict[str, Any], s
             active_run = latest_run if latest_run is not None and not latest_run.is_terminal else None
             model_name, limit = _display_metadata(selected, active_run or latest_run)
             history, todos, context_usage = chat_history.read_chat_state(selected, limit=limit)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # noqa: BLE001  # the page still loads with a history-unavailable notice
             logger.error("Conversation state restore failed (%s)", type(exc).__name__)
             notice = "Conversation history is currently unavailable."
     return {
@@ -157,7 +157,7 @@ def _display_metadata(selected: AgentConversation, candidate: AgentRun | None):
                 .first()
             )
         return (candidate.display_model, candidate.display_context_limit) if candidate else (None, None)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # optional display metadata never loses retained state
         logger.warning("Conversation display metadata unavailable (%s)", type(exc).__name__)
         return None, None
 

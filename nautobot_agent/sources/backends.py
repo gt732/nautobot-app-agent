@@ -223,8 +223,20 @@ class NautobotSourceBackend(_ReadOnlySourceBackend, FilesystemBackend):
             logger.debug("Skipping unreadable source file during search (%s).", type(error).__name__)
         return matches, False
 
+    def _searchable(self, entry: Path, root: Path, matcher) -> bool:
+        """Whether a walked entry is a size-bounded file selected by the include glob."""
+        try:
+            return (
+                entry.is_file()
+                and (matcher is None or matcher(entry.relative_to(root).as_posix()))
+                and entry.stat().st_size <= self.max_file_size_bytes
+            )
+        except (OSError, RuntimeError) as exc:
+            # Unreadable files are skipped while preserving successful matches from the rest of the walk.
+            logger.debug("Skipping unreadable source entry during search (%s).", type(exc).__name__)
+            return False
+
     def _python_search(self, pattern, base_full, include_glob, *, max_count=None, timeout=DEFAULT_GREP_TIMEOUT):
-        # pylint: disable=too-many-locals
         """Keep SDK literal matching, caps and context without scanning collected assets."""
         matcher = compile_grep_include_glob(include_glob) if include_glob else None
         root = base_full if base_full.is_dir() else base_full.parent
@@ -234,14 +246,7 @@ class NautobotSourceBackend(_ReadOnlySourceBackend, FilesystemBackend):
             for entry, resolved in self._source_entries(base_full):
                 if time.monotonic() > deadline:
                     return results, True, None
-                try:
-                    if not entry.is_file() or (matcher and not matcher(entry.relative_to(root).as_posix())):
-                        continue
-                    if entry.stat().st_size > self.max_file_size_bytes:
-                        continue
-                except (OSError, RuntimeError) as exc:
-                    # Unreadable files are skipped while preserving successful matches from the rest of the walk.
-                    logger.debug("Skipping unreadable source entry during search (%s).", type(exc).__name__)
+                if not self._searchable(entry, root, matcher):
                     continue
                 items, truncated = self._search_source_file(entry, pattern, max_count, deadline)
                 if items:

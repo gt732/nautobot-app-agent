@@ -206,7 +206,7 @@ class TraceViewTests(TestCase):  # pylint: disable=too-many-public-methods,nb-in
             self.assertNotContains(response, "This execution is still running.")
             self.assertNotContains(client.get(running.get_absolute_url()), notice)
 
-    def test_list_and_summary_rendering(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_list_and_summary_rendering(self):  # pylint: disable=too-many-locals
         prompt_title = "PRIVATE-FIRST-PROMPT: explain the hidden inventory"
         convo = AgentConversation.objects.create(user=self.other, title=prompt_title)
         trace = self.trace(self.other, conversation=convo)
@@ -463,7 +463,7 @@ class TraceViewTests(TestCase):  # pylint: disable=too-many-public-methods,nb-in
         )
 
     @override_settings(PLUGINS_CONFIG={"nautobot_agent": {"tracing": False}})
-    def test_trace_permissions_and_object_restrictions(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_trace_permissions_and_object_restrictions(self):  # pylint: disable=too-many-locals
         visible = self.trace(self.other)
         hidden = self.trace(self.other)
         span = self.span(visible, input_data={"visible": True})

@@ -166,11 +166,13 @@ class ResolvedPathPolicyTests(SimpleTestCase):
             reject_blocked_target(Device)
 
             proxy = next(model for model in apps.get_models() if model._meta.proxy)
-            with patch(
-                "nautobot_agent.data.access.blocked_models", return_value=(proxy._meta.concrete_model._meta.label,)
+            with (
+                patch(
+                    "nautobot_agent.data.access.blocked_models", return_value=(proxy._meta.concrete_model._meta.label,)
+                ),
+                self.assertRaises(ToolException),
             ):
-                with self.assertRaises(ToolException):
-                    reject_blocked_target(proxy)
+                reject_blocked_target(proxy)
         with patch("nautobot_agent.data.access.blocked_models", return_value=("nautobot_agent.PolicyParent",)):
             with self.assertRaises(ToolException):
                 reject_blocked_target(PolicyChild)
@@ -188,9 +190,11 @@ class ResolvedPathPolicyTests(SimpleTestCase):
                 with self.subTest(path=path), self.assertRaises(ToolException) as caught:
                     reject_blocked_output(_resolve_path(Device, path))
                 self.assertEqual(json.loads(str(caught.exception))["error"], "PermissionDenied")
-        with patch("nautobot_agent.data.access.blocked_models", return_value=("dcim.devicetype",)):
-            with self.assertRaises(ToolException):
-                reject_blocked_output(_resolve_path(Device, "device_type__model"))
+        with (
+            patch("nautobot_agent.data.access.blocked_models", return_value=("dcim.devicetype",)),
+            self.assertRaises(ToolException),
+        ):
+            reject_blocked_output(_resolve_path(Device, "device_type__model"))
 
 
 class LiveDataVisibilityTests(TestCase):

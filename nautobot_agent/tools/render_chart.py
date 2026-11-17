@@ -37,6 +37,15 @@ _Number = StrictInt | StrictFloat
 _HexColor = Annotated[StrictStr, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 
 
+def _invalid_label(name: str, max_length: int) -> bool:
+    return not name.strip() or len(name) > max_length
+
+
+def _distinct_categories(data: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """Return distinct category names across all series in first-seen order."""
+    return list(dict.fromkeys(category for values in data.values() for category in values))
+
+
 class _ThemeColor(BaseModel):
     """One safe palette color for both Nautobot themes."""
 
@@ -87,18 +96,23 @@ class _ChartInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_chart(self):
-        """Enforce chart input semantics, bounds, and the shared serialized payload budget."""
+        """Enforce chart input semantics and label rules."""
         if not self.title.strip():
             raise ValueError("title must not be blank")
         if self.chart_type != EChartsTypeChoices.BAR and (self.orientation != "vertical" or self.stacked):
             raise ValueError("orientation and stacked controls are supported only for bar charts")
         if not self.data or any(not values for values in self.data.values()):
             raise ValueError("data and every series must be non-empty")
-        if any(not name.strip() or len(name) > MAX_SERIES_NAME_LENGTH for name in self.data):
+        if any(_invalid_label(name, MAX_SERIES_NAME_LENGTH) for name in self.data):
             raise ValueError("series names must be non-blank and within the length limit")
-        categories = dict.fromkeys(category for values in self.data.values() for category in values)
-        if any(not category.strip() or len(category) > MAX_CATEGORY_NAME_LENGTH for category in categories):
+        if any(_invalid_label(category, MAX_CATEGORY_NAME_LENGTH) for category in _distinct_categories(self.data)):
             raise ValueError("category names must be non-blank and within the length limit")
+        return self
+
+    @model_validator(mode="after")
+    def validate_bounds(self):
+        """Enforce per-chart-type series and category limits and finite values."""
+        categories = _distinct_categories(self.data)
         if self.chart_type == EChartsTypeChoices.PIE:
             if len(self.data) != 1:
                 raise ValueError("pie charts require exactly one series")
@@ -112,6 +126,11 @@ class _ChartInput(BaseModel):
             for value in values.values()
         ):
             raise ValueError("chart values must be finite numbers")
+        return self
+
+    @model_validator(mode="after")
+    def build_within_budget(self):
+        """Build the chart configuration and enforce the shared serialized payload budget."""
         self._chart_config = _build_chart_config(self)
         serialized = json.dumps(
             {"arguments": self.model_dump(mode="json", exclude_unset=True), "config": self._chart_config},
@@ -137,7 +156,7 @@ _THEME_COLORS_GUIDANCE = "Provide a list of color objects with six-digit light a
 
 def _build_chart_config(chart: _ChartInput) -> dict[str, Any]:
     """Build native options from validated input without repeating public validation."""
-    categories = list(dict.fromkeys(category for values in chart.data.values() for category in values))
+    categories = _distinct_categories(chart.data)
     data = {
         "x": categories,
         "series": [

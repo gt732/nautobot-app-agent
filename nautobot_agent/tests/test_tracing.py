@@ -253,7 +253,7 @@ class TraceTransactionTests(CommittedTestCase):
                     result["pid"] = cursor.fetchone()[0]
                 ready.set()
                 result["state"] = handle.finish_capture(AgentRunStatus.COMPLETED)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # forward worker-thread failures to the test thread
                 result["error"] = exc
             finally:
                 connections.close_all()
@@ -304,7 +304,7 @@ class TraceTransactionTests(CommittedTestCase):
                     worker_data["pid"] = cursor.fetchone()[0]
                 worker_ready.set()
                 worker_data["handle"] = start_trace(self.user, conversation, "concurrent trace")
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # noqa: BLE001  # forward worker-thread failures to the test thread
                 worker_data["error"] = exc
             finally:
                 connections.close_all()
@@ -509,7 +509,7 @@ class TraceHandleTests(TestCase):
         self.assertEqual(tool_span.name, "inventory")
         self.assertEqual(tool_span.input_data["arguments"]["input_str"], "query")
 
-    def test_frozen_capture_drops_late_callbacks_and_preserves_persisted_spans(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_frozen_capture_drops_late_callbacks_and_preserves_persisted_spans(self):  # pylint: disable=too-many-locals
         self.enterContext(self.settings(PLUGINS_CONFIG={"nautobot_agent": {"tracing": True}}))
         conversation = create_conversation(self.user)
         trace = start_trace(self.user, conversation, "request")
@@ -596,7 +596,7 @@ class TraceHandleTests(TestCase):
         self.assertTrue(AgentExecutionSpan.objects.filter(trace_id=trace.trace_id, run_id=surviving_id).exists())
         self.assertFalse(AgentExecutionSpan.objects.filter(trace_id=trace.trace_id, run_id=failed_id).exists())
 
-    def test_error_events_empty_history_and_summary_failure_are_fail_open(self):  # pylint: disable=too-many-locals,too-many-statements
+    def test_error_events_empty_history_and_summary_failure_are_fail_open(self):  # pylint: disable=too-many-locals
         self.enterContext(self.settings(PLUGINS_CONFIG={"nautobot_agent": {"tracing": True}}))
         trace = start_trace(self.user, create_conversation(self.user), "error events")
         callbacks = trace.config()["callbacks"]

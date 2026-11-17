@@ -112,6 +112,14 @@ def _htmx_redirect(destination):
     return response
 
 
+def _span_uuid(value):
+    """Parse a requested span identifier; malformed values are not found."""
+    try:
+        return uuid.UUID(value)
+    except ValueError as error:
+        raise Http404 from error
+
+
 class AgentView(GenericView):
     """Render the Agent page for authenticated users."""
 
@@ -607,7 +615,7 @@ class AgentExecutionTraceUIViewSet(  # pylint: disable=too-many-ancestors,abstra
         payload_route = self.action_map.get("get") == "payload"
         try:
             response = super().dispatch(request, *args, **kwargs)
-        except Exception as error:  # pylint: disable=broad-exception-caught
+        except Exception as error:
             if not payload_route:
                 raise
             if isinstance(error, Http404):
@@ -656,32 +664,24 @@ class AgentExecutionTraceUIViewSet(  # pylint: disable=too-many-ancestors,abstra
         if set(params) - {"field", "span", "download"} or any(len(params.getlist(name)) != 1 for name in params):
             raise Http404
         field = params.get("field")
-        if field not in TRACE_PAYLOAD_FIELDS and field not in SPAN_PAYLOAD_FIELDS:
-            raise Http404
         download = params.get("download")
         if download not in (None, "1"):
             raise Http404
-        span_id = None
-        if field in TRACE_PAYLOAD_FIELDS:
-            if "span" in params:
-                raise Http404
+        if field in TRACE_PAYLOAD_FIELDS and "span" not in params:
             value = getattr(trace, field)
-        else:
-            if "span" not in params:
+            filename = f"trace-{trace.pk}-{field}"
+        elif field in SPAN_PAYLOAD_FIELDS and "span" in params:
+            span_id = _span_uuid(params["span"])
+            value = (
+                AgentExecutionSpan.objects.filter(trace_id=trace.pk, run_id=span_id)
+                .values_list(SPAN_PAYLOAD_FIELDS[field], flat=True)
+                .first()
+            )
+            if value is None:
                 raise Http404
-            try:
-                span_id = uuid.UUID(params["span"])
-            except ValueError as error:
-                raise Http404 from error
-            span_field = SPAN_PAYLOAD_FIELDS[field]
-            payload = AgentExecutionSpan.objects.filter(trace_id=trace.pk, run_id=span_id).values(span_field).first()
-            if payload is None or payload[span_field] is None:
-                raise Http404
-            value = payload[span_field]
-
-        filename = f"trace-{trace.pk}-{field}"
-        if span_id is not None:
             filename = f"trace-{trace.pk}-span-{span_id}-{field}"
+        else:
+            raise Http404
         # JsonResponse would eagerly materialize the entire response string.
         response = StreamingHttpResponse(  # pylint: disable=http-response-with-content-type-json
             _json_chunks(value), content_type="application/json"
@@ -711,13 +711,7 @@ class AgentExecutionTraceUIViewSet(  # pylint: disable=too-many-ancestors,abstra
         }
         if full_access:
             span_value = request.GET.get("span")
-            span_id = None
-            if span_value is not None:
-                try:
-                    span_id = uuid.UUID(span_value)
-                except ValueError as error:
-                    raise Http404 from error
-
+            span_id = None if span_value is None else _span_uuid(span_value)
             if len(request.GET.getlist("span")) > 1:
                 raise Http404
             try:

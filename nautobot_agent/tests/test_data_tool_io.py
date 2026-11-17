@@ -39,13 +39,10 @@ class MySQLStatementTimeoutTests(SimpleTestCase):
                         patch("nautobot_agent.data.tool_io.connection", database),
                     ):
                         expectation = self.assertRaisesMessage(ValueError, "query failed") if failure else nullcontext()
-                        with expectation:
-                            with _statement_timeout():
-                                self.assertEqual(
-                                    cursor.execute.call_args, call(f"SET SESSION {variable} = %s", [timeout])
-                                )
-                                if failure:
-                                    raise ValueError("query failed")
+                        with expectation, _statement_timeout():
+                            self.assertEqual(cursor.execute.call_args, call(f"SET SESSION {variable} = %s", [timeout]))
+                            if failure:
+                                raise ValueError("query failed")
                     self.assertEqual(
                         cursor.execute.call_args_list,
                         [
